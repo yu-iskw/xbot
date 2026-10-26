@@ -1,0 +1,16 @@
+version: 2
+
+seeds:
+  - name: raw_users
+    description: Sample seed data used by the template integration tests
+    columns:
+      - name: id
+        tests:
+          - not_null
+          - unique
+      - name: raw_name
+        tests:
+          - not_null
+      - name: raw_email
+        tests:
+          - not_null

@@ -1,0 +1,124 @@
+name: Integration tests
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    paths:
+      - .github/workflows/integration-tests.yml
+      - macros/**/*
+      - integration_tests/**/*
+      - dbt_project.yml
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+        dbt-group: ["dbt-core-1-10", "dbt-core-1-11"]
+        adapter: ["postgres", "duckdb"]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: dbt_package_template
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dbt_package_template"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: integration_tests
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "integration_tests/pyproject.toml"
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run integration tests
+        env:
+          DBT_POSTGRES_HOST: localhost
+          DBT_POSTGRES_PORT: "5432"
+          DBT_POSTGRES_USER: postgres
+          DBT_POSTGRES_PASSWORD: postgres
+          DBT_POSTGRES_DATABASE: dbt_package_template
+          DBT_POSTGRES_SCHEMA: dbt_package_template
+          DBT_DUCKDB_PATH: ${{ github.workspace }}/integration_tests/target/ci_${{ github.run_id }}_${{ matrix.python-version }}_${{ matrix.dbt-group }}_${{ matrix.adapter }}.duckdb
+        run: |
+          mkdir -p target
+          rm -f "${DBT_DUCKDB_PATH}"
+          uv run nox -s "unit_tests-${{ matrix.python-version }}(adapter='${{ matrix.adapter }}', uv_group='${{ matrix.dbt-group }}')"
+          uv run nox -s "integration_tests-${{ matrix.python-version }}(adapter='${{ matrix.adapter }}', uv_group='${{ matrix.dbt-group }}')"
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-logs-${{ matrix.python-version }}-${{ matrix.dbt-group }}-${{ matrix.adapter }}
+          retention-days: 3
+          path: |
+            integration_tests/logs
+            integration_tests/target
+
+  fusion:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: dbt_package_template
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dbt_package_template"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: integration_tests
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "integration_tests/pyproject.toml"
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run Fusion tests
+        env:
+          DBT_POSTGRES_HOST: localhost
+          DBT_POSTGRES_PORT: "5432"
+          DBT_POSTGRES_USER: postgres
+          DBT_POSTGRES_PASSWORD: postgres
+          DBT_POSTGRES_DATABASE: dbt_package_template
+          DBT_POSTGRES_SCHEMA: dbt_package_template
+          DBT_DUCKDB_PATH: ${{ github.workspace }}/integration_tests/target/fusion_${{ github.run_id }}_${{ matrix.python-version }}.duckdb
+        run: |
+          mkdir -p target
+          rm -f "${DBT_DUCKDB_PATH}"
+          uv run nox -f noxfile_fusion.py -s "fusion_unit_tests-${{ matrix.python-version }}"
+          uv run nox -f noxfile_fusion.py -s "fusion_integration_tests-${{ matrix.python-version }}"

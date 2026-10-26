@@ -1,0 +1,2 @@
+# Ignore temporary backup files created while editing example models locally.
+*.sql.bak

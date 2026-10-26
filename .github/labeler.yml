@@ -1,0 +1,42 @@
+# SEE .github/workflows/labeler.yml
+# SEE https://github.com/actions/labeler
+
+# Related to CI
+CI:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/*'
+          - '.github/**/*'
+
+# Related to dbt analysis
+integration-tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'integration_tests/*'
+          - 'integration_tests/**/*'
+
+# Related to dbt models
+macros:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'macros/*'
+          - 'macros/**/*'
+
+# Foundational changes
+core:
+  - changed-files:
+      - any-glob-to-any-file: 'dbt_project.yml'
+
+# Related to documentations
+docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'docs/*.md'
+          - 'docs/**/*.md'
+          - 'README.md'
+
+action:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/actions/generate-models/*'
+          - '.github/actions/generate-models/**/*'

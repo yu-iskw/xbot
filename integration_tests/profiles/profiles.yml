@@ -1,0 +1,24 @@
+default:
+  target: postgres
+  outputs:
+    postgres:
+      type: postgres
+      host: "{{ env_var('DBT_POSTGRES_HOST', 'localhost') }}"
+      port: "{{ env_var('DBT_POSTGRES_PORT', '5432') | as_number }}"
+      user: "{{ env_var('DBT_POSTGRES_USER', 'postgres') }}"
+      password: "{{ env_var('DBT_POSTGRES_PASSWORD', 'postgres') }}"
+      dbname: "{{ env_var('DBT_POSTGRES_DATABASE', 'dbt_package_template') }}"
+      schema: "{{ env_var('DBT_POSTGRES_SCHEMA', 'dbt_package_template') }}"
+      threads: "{{ env_var('DBT_THREADS', '4') | as_number }}"
+    duckdb:
+      type: duckdb
+      # Use :memory: plus ATTACH so dbt's database name matches a real catalog. A file path
+      # alone makes dbt-duckdb set database to the file stem; multi-invocation CI runs then hit
+      # Binder "Catalog does not exist" when that catalog is not attached as expected.
+      path: ":memory:"
+      database: "dbt_working_db"
+      attach:
+        - path: "{{ env_var('DBT_DUCKDB_PATH', 'integration_tests.duckdb') }}"
+          alias: "dbt_working_db"
+      schema: "{{ env_var('DBT_DUCKDB_SCHEMA', 'dbt_package_template') }}"
+      threads: "{{ env_var('DBT_THREADS', '4') | as_number }}"

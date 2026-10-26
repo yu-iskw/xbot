@@ -1,0 +1,51 @@
+# Shared Codex defaults for this repository.
+# Keep this file conservative and repo-specific: strong defaults, a small
+# subagent set, and task-shaped profiles for dbt package work.
+model = "gpt-5.4"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+file_opener = "cursor"
+web_search = "cached"
+
+[sandbox_workspace_write]
+network_access = false
+
+[agents]
+max_threads = 6
+max_depth = 2
+
+[agents.macro_package_specialist]
+description = "Implement or update package macros, macro docs, mirrored macro-runner unit tests, and related package docs."
+config_file = "agents/macro_package_specialist.toml"
+
+[agents.verifier]
+description = "Run lint and the right dbt test targets for this repo, fix failures when appropriate, and report exact commands and outcomes."
+config_file = "agents/verifier.toml"
+
+[agents.reviewer]
+description = "Review current changes for macro regressions, dispatch mistakes, workflow/config drift, and docs mismatches."
+config_file = "agents/reviewer.toml"
+
+[agents.test_gap_checker]
+description = "Audit coverage gaps across macro unit tests, integration tests, and workflow/config verification."
+config_file = "agents/test_gap_checker.toml"
+
+# Small, iterative edits and local investigation.
+[profiles.fast]
+model = "gpt-5.4"
+model_reasoning_effort = "low"
+
+# Planning, deeper review, and larger design changes.
+[profiles.deep]
+model = "gpt-5.4"
+model_reasoning_effort = "high"
+
+# Dedicated review profile for bug-finding and regression analysis.
+[profiles.review]
+model = "gpt-5.4"
+model_reasoning_effort = "high"
+
+# Verification profile for lint/test orchestration and failure analysis.
+[profiles.verify]
+model = "gpt-5.4"
+model_reasoning_effort = "medium"

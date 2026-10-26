@@ -1,0 +1,14 @@
+version: 2
+
+macros:
+  - name: normalize_text
+    description: >
+      Returns a SQL expression that normalizes string input (cast to the adapter string
+      type, lowercased, trimmed; blank strings become null). Embed the result in SELECT
+      lists or expressions.
+    arguments:
+      - name: expression
+        type: string
+        description: >
+          SQL expression or column reference to normalize (pass a valid SQL fragment,
+          e.g. a column name or parenthesized expression).

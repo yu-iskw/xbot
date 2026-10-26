@@ -1,0 +1,16 @@
+version: 2
+
+models:
+  - name: stg_users
+    description: Example staging model that demonstrates how to call a package macro
+    columns:
+      - name: id
+        tests:
+          - not_null
+          - unique
+      - name: normalized_name
+        tests:
+          - not_null
+      - name: normalized_email
+        tests:
+          - not_null
