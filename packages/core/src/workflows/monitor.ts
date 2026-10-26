@@ -4,11 +4,12 @@ import { topicQuery } from "../research/topics";
 import {
   MonitorInputSchema,
   MonitorResultSchema,
-  type ResearchInput,
+  ResearchInputSchema,
   type ResearchReport,
   type ResearchTopicSchema,
 } from "../schemas/research";
 import type { XbotStore } from "../storage/store";
+import { type createResearchWorkflow, ResearchWorkflowOutputSchema } from "./research";
 
 export const MONITOR_WORKFLOW_ID = "xbot-monitor";
 
@@ -22,8 +23,8 @@ export interface ScheduleEntry {
 export interface MonitorWorkflowDeps {
   store: XbotStore;
   topics: z.output<typeof ResearchTopicSchema>[];
-  /** The runtime's research entry point, so admission, idempotency, and budgets apply unchanged. */
-  research(input: ResearchInput): Promise<{ runId: string; report: ResearchReport }>;
+  /** Nested research workflow. Its prepare step admits the run, including scheduled fires. */
+  researchWorkflow: ReturnType<typeof createResearchWorkflow>;
   schedule?: ScheduleEntry[];
 }
 
@@ -32,8 +33,6 @@ const BaselineSchema = z.object({
   query: z.string(),
   previousReportId: z.string().optional(),
 });
-
-const ResearchedSchema = BaselineSchema.extend({ runId: z.string(), reportId: z.string() });
 
 /** Normalize a claim for comparison: case, punctuation, and numbers vary between runs of the same finding. */
 function claimKey(claim: string): string {
@@ -80,35 +79,16 @@ export function createMonitorWorkflow(deps: MonitorWorkflowDeps) {
     },
   });
 
-  const research = createStep({
-    id: "research",
-    description: "Run bounded research for the topic",
-    inputSchema: BaselineSchema,
-    outputSchema: ResearchedSchema,
-    execute: async ({ inputData }) => {
-      const { input, query } = inputData;
-      const outcome = await deps.research({
-        query,
-        topicId: input.topicId,
-        maxPosts: input.maxPosts,
-        windowDays: input.windowDays,
-        trigger: input.trigger,
-        tenantId: input.tenantId,
-        ...(input.triggerEventId ? { triggerEventId: input.triggerEventId } : {}),
-      });
-      return { ...inputData, runId: outcome.runId, reportId: outcome.report.id };
-    },
-  });
-
   const diff = createStep({
     id: "diff",
     description: "Compare the new report with the previous one",
-    inputSchema: ResearchedSchema,
+    inputSchema: ResearchWorkflowOutputSchema,
     outputSchema: MonitorResultSchema,
-    execute: async ({ inputData }) => {
-      const { input, runId, reportId, previousReportId } = inputData;
+    execute: async ({ inputData, getStepResult }) => {
+      const { input, previousReportId } = getStepResult(baseline);
+      const { runId, reportId, report } = inputData;
       if (previousReportId === reportId) {
-        // The research step replayed an occurrence that was already processed.
+        // Nested research replayed an occurrence that was already processed.
         return {
           topicId: input.topicId,
           runId,
@@ -119,17 +99,15 @@ export function createMonitorWorkflow(deps: MonitorWorkflowDeps) {
           summary: "This occurrence was already processed; no new research was run.",
         };
       }
-      const [current, previous] = await Promise.all([
-        deps.store.getReport(reportId, input.tenantId),
-        previousReportId ? deps.store.getReport(previousReportId, input.tenantId) : undefined,
-      ]);
-      if (!current) throw new Error(`Report ${reportId} not found`);
+      const previous = previousReportId
+        ? await deps.store.getReport(previousReportId, input.tenantId)
+        : undefined;
       return {
         topicId: input.topicId,
         runId,
         reportId,
         ...(previous ? { previousReportId: previous.id, previousGeneratedAt: previous.generatedAt } : {}),
-        ...diffReports(current, previous),
+        ...diffReports(report, previous),
       };
     },
   });
@@ -142,7 +120,18 @@ export function createMonitorWorkflow(deps: MonitorWorkflowDeps) {
     ...(deps.schedule && deps.schedule.length > 0 ? { schedule: deps.schedule } : {}),
   })
     .then(baseline)
-    .then(research)
+    .map(async ({ inputData }) =>
+      ResearchInputSchema.parse({
+        query: inputData.query,
+        topicId: inputData.input.topicId,
+        maxPosts: inputData.input.maxPosts,
+        windowDays: inputData.input.windowDays,
+        trigger: inputData.input.trigger,
+        tenantId: inputData.input.tenantId,
+        ...(inputData.input.triggerEventId ? { triggerEventId: inputData.input.triggerEventId } : {}),
+      }),
+    )
+    .then(deps.researchWorkflow)
     .then(diff)
     .commit();
 }

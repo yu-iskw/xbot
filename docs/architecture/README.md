@@ -42,7 +42,7 @@ Values are Mastra model router strings (`provider/model-id`) or model instances.
 
 ## Budgets and cost
 
-`BudgetedXReadClient` estimates the worst-case cost of each request (`posts × $0.005 + users × $0.010` by default, configurable) and refuses it if it would exceed the run cap (requests inside a run), the per-request cap (requests outside a run, such as chat tool calls), or the remaining UTC daily or monthly budget. Actual spend is written to `xbot_usage`, which every interface shares. Mock mode keeps run caps but skips daily and monthly limits. Estimates ignore X's 24-hour deduplication window, so they err high.
+`BudgetedXReadClient` estimates the worst-case cost of each request (`posts × $0.005 + users × $0.010` by default, configurable) and refuses it if it would exceed the run cap (requests inside a run), the per-request cap (requests outside a run, such as chat tool calls), or the remaining UTC daily or monthly budget. The estimate is reserved until the request settles or fails, so overlapping calls cannot spend the same remaining balance. Actual spend is written to `xbot_usage`, which every interface shares. Mock mode keeps run caps but skips daily and monthly limits. Estimates ignore X's 24-hour deduplication window, so they err high. Post lookup counts one user read per distinct author, because the request expands authors.
 
 ## Persistence
 
@@ -69,7 +69,7 @@ Topics with a `schedule` become entries in the **monitor** workflow's native Mas
 
 ## Run admission
 
-The runtime admits a run before starting its workflow: it derives the idempotency key and inserts the run row, so the canonical run id exists the moment `research`/`startResearch`/`discover` is called. Replays are answered from storage without starting a workflow. Each workflow's `prepare` step admits again, which is a no-op for an already-admitted id; this is how scheduled fires, which bypass the runtime, get the same idempotency. If a workflow ends in anything but success, the run is marked `failed`. The CLI never starts the scheduler. A terminated CLI process does not resume work: long-running autonomous work needs a running server or worker with shared storage.
+The runtime admits a run before starting its workflow: it derives the idempotency key and inserts the run row, so the canonical run id exists the moment `research`/`startResearch`/`discover` is called. Replays are answered from storage without starting a workflow. A workflow started directly (Mastra Studio, the workflow API, or a topic schedule) admits inside `prepare` instead. `prepare` continues a run it already inserted and does not insert that id again. The monitor workflow nests the research workflow, so a scheduled fire is admitted once, by research `prepare`. If a workflow ends in anything but success, the run is marked `failed`. The CLI never starts the scheduler. A terminated CLI process does not resume work: long-running autonomous work needs a running server or worker with shared storage.
 
 ## Security model
 

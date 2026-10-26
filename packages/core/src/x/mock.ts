@@ -11,7 +11,13 @@ import {
   type XUser,
 } from "../schemas/x";
 import { FIXTURE_POSTS, FIXTURE_USERS, type FixturePost, type FixtureUser } from "./fixtures";
-import { XApiError, type XReadClient, type XRequestContext } from "./port";
+import {
+  assertPostIdBatch,
+  parseRecentSearch,
+  XApiError,
+  type XReadClient,
+  type XRequestContext,
+} from "./port";
 import { matchesQuery } from "./query";
 
 export interface MockXReadClientOptions {
@@ -45,10 +51,7 @@ export class MockXReadClient implements XReadClient {
   }
 
   async searchRecent(input: SearchInput, _ctx?: XRequestContext): Promise<SearchResult> {
-    const resolved = SearchInputSchema.parse(input);
-    if (resolved.maxResults > 100) {
-      throw new XApiError("Recent search allows at most 100 results per page", "invalid_request");
-    }
+    const resolved = parseRecentSearch(input);
     const tick = this.tick();
     return this.search(resolved, tick, tick.nowMs - 7 * 24 * 60 * 60 * 1000);
   }
@@ -59,7 +62,7 @@ export class MockXReadClient implements XReadClient {
 
   async getPosts(ids: string[], _ctx?: XRequestContext): Promise<XPost[]> {
     if (ids.length === 0) return [];
-    if (ids.length > 100) throw new XApiError("At most 100 post IDs per request", "invalid_request");
+    assertPostIdBatch(ids);
     const wanted = new Set(ids);
     const tick = this.tick();
     return this.posts.filter((p) => wanted.has(p.id)).map((p) => this.toPost(p, tick));

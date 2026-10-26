@@ -109,8 +109,12 @@ describe("LiveXReadClient (contract, fake transport)", () => {
     expect(post).toMatchObject({ authorUsername: "fixture_ana", metrics: { likes: 3, reposts: 1 } });
     expect(post.url).toBe("https://x.com/fixture_ana/status/1900000000000000001");
     expect(calls[0]!.method).toBe("GET");
-    expect(new URL(calls[0]!.url).pathname).toBe("/2/tweets/search/recent");
+    const url = new URL(calls[0]!.url);
+    expect(url.pathname).toBe("/2/tweets/search/recent");
+    expect(url.searchParams.has("sort_order")).toBe(false);
     expect(calls[0]!.auth).toBe("Bearer test-token");
+    await client.searchRecent({ query: "hello", maxResults: 10, sortOrder: "relevancy" });
+    expect(new URL(calls[1]!.url).searchParams.get("sort_order")).toBe("relevancy");
 
     const mock = await new MockXReadClient().searchRecent({ query: "#Mastra" });
     expect(Object.keys(XPostSchema.shape)).toEqual(expect.arrayContaining(Object.keys(mock.posts[0]!)));

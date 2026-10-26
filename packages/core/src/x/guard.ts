@@ -1,3 +1,4 @@
+import { X_USERNAME_BODY } from "../schemas/x";
 import { X_READ_OPERATIONS, XApiError, type XReadClient } from "./port";
 
 /**
@@ -21,7 +22,7 @@ const ALLOWED_X_PATHS: readonly RegExp[] = [
   /^\/2\/tweets\/search\/recent$/,
   /^\/2\/tweets\/search\/all$/,
   /^\/2\/tweets$/,
-  /^\/2\/users\/by\/username\/[A-Za-z0-9_]{1,15}$/,
+  new RegExp(`^/2/users/by/username/${X_USERNAME_BODY}$`),
   /^\/2\/users\/[0-9]+\/tweets$/,
 ];
 

@@ -120,6 +120,18 @@ export const ResearchReportSchema = z.object({
 });
 export type ResearchReport = z.infer<typeof ResearchReportSchema>;
 
+/** List/search row. Report bodies stay out of this shape. */
+export const ReportSummarySchema = z.object({
+  id: z.string(),
+  runId: z.string(),
+  query: z.string(),
+  summary: z.string(),
+  status: z.enum(["completed", "partial"]),
+  generatedAt: z.string(),
+  sources: z.number(),
+});
+export type ReportSummary = z.infer<typeof ReportSummarySchema>;
+
 export const RunStatusSchema = z.enum(["running", "completed", "failed"]);
 export type RunStatus = z.infer<typeof RunStatusSchema>;
 

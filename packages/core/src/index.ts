@@ -19,11 +19,10 @@ export { LibSqlXbotStore, SQLITE_DIALECT } from "./storage/libsql";
 export { createPgPool, POSTGRES_DIALECT, PostgresXbotStore } from "./storage/postgres";
 export type { SqlDialect, SqlDriver, SqlResult, SqlStatement, SqlValue } from "./storage/sql";
 export { SqlXbotStore } from "./storage/sql";
-export type { EvidenceAvailability, ListReportsOptions, ReportSummary, XbotStore } from "./storage/store";
+export type { EvidenceAvailability, ListReportsOptions, XbotStore } from "./storage/store";
 export type { ResearchOperations, ToolScope } from "./tools/research-tools";
 export {
   createResearchTools,
-  ReportSummarySchema,
   toolScope,
   XBOT_TENANT_CONTEXT_KEY,
   XBOT_TRIGGER_CONTEXT_KEY,

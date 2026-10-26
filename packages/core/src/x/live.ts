@@ -7,11 +7,18 @@ import {
   type UserPostsInput,
   UserPostsInputSchema,
   userUrl,
+  X_USERNAME_BODY_RE,
   type XPost,
   type XUser,
 } from "../schemas/x";
 import { createReadOnlyFetch } from "./guard";
-import { XApiError, type XReadClient, type XRequestContext } from "./port";
+import {
+  assertPostIdBatch,
+  parseRecentSearch,
+  XApiError,
+  type XReadClient,
+  type XRequestContext,
+} from "./port";
 
 type PostField = NonNullable<
   NonNullable<Parameters<Client["posts"]["searchRecent"]>[1]>["postFields"]
@@ -115,10 +122,7 @@ export class LiveXReadClient implements XReadClient {
   }
 
   async searchRecent(input: SearchInput, ctx?: XRequestContext): Promise<SearchResult> {
-    const resolved = SearchInputSchema.parse(input);
-    if (resolved.maxResults > 100) {
-      throw new XApiError("Recent search allows at most 100 results per page", "invalid_request");
-    }
+    const resolved = parseRecentSearch(input);
     return this.#paginate(resolved.maxPages, (token) =>
       this.#sdk.posts.searchRecent(resolved.query, { ...page(resolved, token, "nextToken"), ...fields(ctx) }),
     );
@@ -133,14 +137,14 @@ export class LiveXReadClient implements XReadClient {
 
   async getPosts(ids: string[], ctx?: XRequestContext): Promise<XPost[]> {
     if (ids.length === 0) return [];
-    if (ids.length > 100) throw new XApiError("At most 100 post IDs per request", "invalid_request");
+    assertPostIdBatch(ids);
     const page = (await this.#call(() => this.#sdk.posts.getByIds(ids, fields(ctx)))) as SdkPage;
     return this.#normalizePage(page).posts;
   }
 
   async getUserByUsername(username: string, ctx?: XRequestContext): Promise<XUser> {
     const clean = username.replace(/^@/, "");
-    if (!/^[A-Za-z0-9_]{1,15}$/.test(clean)) throw new XApiError("Invalid X username", "invalid_request");
+    if (!X_USERNAME_BODY_RE.test(clean)) throw new XApiError("Invalid X username", "invalid_request");
     const res = (await this.#call(() =>
       this.#sdk.users.getByUsername(clean, {
         userFields: fields(ctx).userFields,
@@ -229,9 +233,9 @@ function installReadOnlyHttp(sdk: Client, guarded: typeof fetch): void {
   holder.httpClient = http;
 }
 
-/** Page size, time window, and pagination token for list endpoints. */
+/** Page size, time window, sort, and pagination token for list endpoints. */
 function page(
-  input: { maxResults: number; startTime?: string; endTime?: string },
+  input: { maxResults: number; startTime?: string; endTime?: string; sortOrder?: "recency" | "relevancy" },
   token: string | undefined,
   tokenKey: "nextToken" | "paginationToken",
 ) {
@@ -239,6 +243,7 @@ function page(
     maxResults: input.maxResults,
     startTime: input.startTime,
     endTime: input.endTime,
+    ...(input.sortOrder ? { sortOrder: input.sortOrder } : {}),
     ...(token ? { [tokenKey]: token } : {}),
   };
 }
