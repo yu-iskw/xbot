@@ -11,7 +11,13 @@ import {
   type XUser,
 } from "../schemas/x";
 import { FIXTURE_POSTS, FIXTURE_USERS, type FixturePost, type FixtureUser } from "./fixtures";
-import { assertPostIdBatch, parseRecentSearch, XApiError, type XReadClient, type XRequestContext } from "./port";
+import {
+  assertPostIdBatch,
+  parseRecentSearch,
+  XApiError,
+  type XReadClient,
+  type XRequestContext,
+} from "./port";
 import { matchesQuery } from "./query";
 
 export interface MockXReadClientOptions {

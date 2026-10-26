@@ -12,7 +12,13 @@ import {
   type XUser,
 } from "../schemas/x";
 import { createReadOnlyFetch } from "./guard";
-import { assertPostIdBatch, parseRecentSearch, XApiError, type XReadClient, type XRequestContext } from "./port";
+import {
+  assertPostIdBatch,
+  parseRecentSearch,
+  XApiError,
+  type XReadClient,
+  type XRequestContext,
+} from "./port";
 
 type PostField = NonNullable<
   NonNullable<Parameters<Client["posts"]["searchRecent"]>[1]>["postFields"]
