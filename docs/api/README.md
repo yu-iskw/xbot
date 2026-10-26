@@ -25,7 +25,7 @@ Tokens must be at least 16 characters. The server refuses to start without token
 
 Errors look like `{ "error": { "code", "message" } }`: 400 for invalid input, 401 unauthorized, 402 budget exceeded, 429 rate limited, 502 upstream.
 
-Mastra's built-in `/api/*` routes are off by default. `XBOT_HTTP_MASTRA_API=true` mounts them behind the same token check, but they are not tenant-aware, so treat those tokens as admin tokens. `XBOT_ENABLE_SCHEDULES=true` starts topic schedules in this process.
+Mastra's built-in `/api/*` routes are off by default. They are not tenant-aware, so `XBOT_HTTP_MASTRA_API=true` mounts them behind a separate admin token list (`XBOT_HTTP_ADMIN_TOKENS`, comma-separated); tenant tokens are rejected there. List `limit` values are clamped to 1–200. `XBOT_ENABLE_SCHEDULES=true` starts topic schedules in this process.
 
 ## MCP (`@yu-iskw/xbot-mcp`)
 

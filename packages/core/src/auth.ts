@@ -29,6 +29,18 @@ export function parseTokenTenants(
   return tokens;
 }
 
+/** Parse a plain comma-separated token list, rejecting tokens shorter than 16 characters. */
+export function parseTokenList(list: string | undefined, label = "token"): string[] {
+  const tokens = (list ?? "")
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
+  for (const token of tokens) {
+    if (token.length < 16) throw new Error(`${label}s must be at least 16 characters`);
+  }
+  return tokens;
+}
+
 const digest = (s: string) => createHash("sha256").update(s).digest();
 
 /**

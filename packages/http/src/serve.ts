@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 import {
   createXbotRuntime,
   mergeConfig,
+  parseTokenList,
   resolveConfig,
   type XbotConfig,
   type XbotRuntime,
@@ -34,6 +35,7 @@ export async function startXbotHttpServer(options: ServeOptions = {}) {
     tokens: parseTokens(env, runtime.info.tenantId),
     insecureNoAuth: options.insecureNoAuth ?? env.XBOT_HTTP_INSECURE_NO_AUTH === "true",
     mastraApi: options.mastraApi ?? env.XBOT_HTTP_MASTRA_API === "true",
+    adminTokens: parseTokenList(env.XBOT_HTTP_ADMIN_TOKENS, "HTTP admin token"),
   });
   const port = options.port ?? Number(env.PORT ?? 4111);
   const hostname = options.hostname ?? env.HOST ?? "127.0.0.1";

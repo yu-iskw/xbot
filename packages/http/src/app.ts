@@ -22,10 +22,12 @@ export interface XbotHttpOptions {
   /** Local development only: serve without authentication. */
   insecureNoAuth?: boolean;
   /**
-   * Also mount Mastra's built-in agent/workflow routes under /api. They are not tenant-aware,
-   * so treat any token that can reach them as an administrator. Off by default.
+   * Also mount Mastra's built-in agent/workflow routes under /api. They are not tenant-aware, so
+   * they accept only `adminTokens`, never tenant tokens. Off by default.
    */
   mastraApi?: boolean;
+  /** Tokens allowed on Mastra's built-in /api routes. Required when `mastraApi` is set (unless insecure). */
+  adminTokens?: string[];
 }
 
 /** Client-supplied event id; replays with the same id return the original report. */
@@ -75,6 +77,12 @@ export async function createXbotHttpApp(options: XbotHttpOptions): Promise<Hono<
       "Refusing to start without API tokens. Set XBOT_HTTP_TOKEN(S) or pass insecureNoAuth for local development.",
     );
   }
+  const adminTokens = options.adminTokens ?? [];
+  if (options.mastraApi && adminTokens.length === 0 && !options.insecureNoAuth) {
+    throw new Error(
+      "mastraApi requires admin tokens (XBOT_HTTP_ADMIN_TOKENS); tenant tokens cannot reach /api.",
+    );
+  }
   const app = new Hono<Env>();
 
   // Registered before auth, and it returns without calling next(), so health stays public.
@@ -82,11 +90,13 @@ export async function createXbotHttpApp(options: XbotHttpOptions): Promise<Hono<
     c.json({ status: "ok", xMode: runtime.info.xMode, chat: runtime.info.chatAvailable }),
   );
 
-  // Everything other than health is authenticated, including Mastra's own routes when mounted.
-  if (tokens) {
-    const auth = bearerAuth<Env>(tokens);
-    app.use("/v1/*", auth);
-    app.use("/api/*", auth);
+  // Everything other than health is authenticated. Mastra's own routes are not tenant-aware, so they
+  // take a separate admin token list rather than any tenant token.
+  if (tokens || adminTokens.length > 0) {
+    app.use("/v1/*", bearerAuth<Env>(tokens ?? {}));
+    if (options.mastraApi) {
+      app.use("/api/*", bearerAuth<Env>(Object.fromEntries(adminTokens.map((t) => [t, "admin"]))));
+    }
   } else {
     app.use("*", async (c, next) => {
       c.set("tenantId", runtime.info.tenantId);
@@ -167,7 +177,8 @@ export async function createXbotHttpApp(options: XbotHttpOptions): Promise<Hono<
   });
 
   app.get("/v1/reports", async (c) => {
-    const limit = Math.min(Number(c.req.query("limit") ?? 20) || 20, 200);
+    // The store clamps the limit to its allowed range.
+    const limit = Number(c.req.query("limit")) || undefined;
     const q = c.req.query("q");
     const topicId = c.req.query("topicId");
     const reports = await runtime.listReports({

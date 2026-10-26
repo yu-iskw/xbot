@@ -1,6 +1,6 @@
 export { createResearchAgent, RESEARCH_AGENT_ID } from "./agents/research-agent";
 export type { TokenTenantMap } from "./auth";
-export { createBearerResolver, parseTokenTenants } from "./auth";
+export { createBearerResolver, parseTokenList, parseTokenTenants } from "./auth";
 export type { XbotConfig } from "./config";
 export { loadConfigFile, loadConfigFromEnv, mergeConfig, resolveConfig } from "./config";
 export { classifyQueryError, errorMessage } from "./errors";

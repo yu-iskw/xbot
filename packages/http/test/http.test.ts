@@ -5,6 +5,7 @@ import { createXbotHttpApp, parseTokens } from "../src/index";
 
 const TOKEN_A = "token-a-0123456789abcdef";
 const TOKEN_B = "token-b-0123456789abcdef";
+const ADMIN_TOKEN = "admin-token-0123456789abcdef";
 const auth = (t: string) => ({ authorization: `Bearer ${t}`, "content-type": "application/json" });
 
 async function setup(config: XbotConfig = {}, mastraApi = false) {
@@ -13,6 +14,7 @@ async function setup(config: XbotConfig = {}, mastraApi = false) {
     runtime,
     tokens: { [TOKEN_A]: "tenant-a", [TOKEN_B]: "tenant-b" },
     mastraApi,
+    ...(mastraApi ? { adminTokens: [ADMIN_TOKEN] } : {}),
   });
   return { runtime, app };
 }
@@ -151,8 +153,32 @@ describe("xbot HTTP API", () => {
     await off.runtime.close();
     const on = await setup({}, true);
     expect((await on.app.request("/api/workflows")).status).toBe(401);
-    expect((await on.app.request("/api/workflows", { headers: auth(TOKEN_A) })).status).toBe(200);
+    // Mastra's routes are not tenant-aware, so tenant tokens are rejected there.
+    expect((await on.app.request("/api/workflows", { headers: auth(TOKEN_A) })).status).toBe(401);
+    expect((await on.app.request("/api/workflows", { headers: auth(ADMIN_TOKEN) })).status).toBe(200);
+    // Admin tokens are not tenant tokens either.
+    expect((await on.app.request("/v1/reports", { headers: auth(ADMIN_TOKEN) })).status).toBe(401);
     await on.runtime.close();
+  });
+
+  it("requires admin tokens to mount Mastra's routes and clamps list limits", async () => {
+    const runtime = await createXbotRuntime({ storage: { url: ":memory:" }, x: { mode: "mock" } });
+    await expect(createXbotHttpApp({ runtime, tokens: { [TOKEN_A]: "a" }, mastraApi: true })).rejects.toThrow(
+      /admin tokens/,
+    );
+    const app = await createXbotHttpApp({ runtime, tokens: { [TOKEN_A]: "a" } });
+    for (const n of [1, 2, 3]) await runtime.research({ query: `Mastra ${n}`, tenantId: "a" });
+    const list = async (limit: string) =>
+      (
+        (await (await app.request(`/v1/reports?limit=${limit}`, { headers: auth(TOKEN_A) })).json()) as {
+          reports: unknown[];
+        }
+      ).reports.length;
+    // A negative LIMIT would mean "unlimited" in SQLite; it falls back to the default instead.
+    expect(await list("-1")).toBe(3);
+    expect(await list("1")).toBe(1);
+    expect(await list("abc")).toBe(3);
+    await runtime.close();
   });
 
   it("streams chat over SSE with tenant-scoped threads", async () => {

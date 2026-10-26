@@ -49,6 +49,15 @@ export interface SqlDialect {
   ilike: string;
 }
 
+/**
+ * Page sizes are clamped to 1..200. Callers pass user input through, and SQLite treats a negative
+ * LIMIT as "no limit", so the lower bound matters as much as the upper one.
+ */
+export function clampLimit(limit: number | undefined, fallback = 20, max = 200): number {
+  const n = Math.trunc(Number(limit));
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, max) : fallback;
+}
+
 function schema(d: SqlDialect): string[] {
   return [
     `CREATE TABLE IF NOT EXISTS xbot_runs (
@@ -80,6 +89,7 @@ function schema(d: SqlDialect): string[] {
     body TEXT NOT NULL
   )`,
     "CREATE INDEX IF NOT EXISTS xbot_reports_tenant ON xbot_reports (tenant_id, generated_at)",
+    "CREATE INDEX IF NOT EXISTS xbot_reports_topic ON xbot_reports (tenant_id, topic_id, generated_at)",
     `CREATE TABLE IF NOT EXISTS xbot_evidence (
     report_id TEXT NOT NULL,
     post_id TEXT NOT NULL,
@@ -106,6 +116,7 @@ function schema(d: SqlDialect): string[] {
     at TEXT NOT NULL
   )`,
     "CREATE INDEX IF NOT EXISTS xbot_usage_at ON xbot_usage (mode, at)",
+    "CREATE INDEX IF NOT EXISTS xbot_post_cache_expires ON xbot_post_cache (expires_at)",
   ];
 }
 
@@ -209,11 +220,11 @@ export class SqlXbotStore implements XbotStore {
     return res.rows[0] ? rowToRun(res.rows[0]) : undefined;
   }
 
-  async listRuns(tenantId: string, limit = 20): Promise<ResearchRun[]> {
+  async listRuns(tenantId: string, limit?: number): Promise<ResearchRun[]> {
     await this.init();
     const res = await this.#db.execute({
       sql: "SELECT * FROM xbot_runs WHERE tenant_id = ? ORDER BY started_at DESC LIMIT ?",
-      args: [tenantId, limit],
+      args: [tenantId, clampLimit(limit)],
     });
     return res.rows.map(rowToRun);
   }
@@ -274,7 +285,7 @@ export class SqlXbotStore implements XbotStore {
       where.push("topic_id = ?");
       args.push(options.topicId);
     }
-    args.push(Math.min(options.limit ?? 20, 200));
+    args.push(clampLimit(options.limit));
     const res = await this.#db.execute({
       sql: `SELECT id, run_id, query, summary, status, generated_at,
                    ${this.#dialect.sourcesCount} AS sources FROM xbot_reports
