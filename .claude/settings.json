@@ -63,9 +63,7 @@
       "Bash(rm -rf /*)",
       "Bash(sudo *)",
       "Bash(curl * | bash)",
-      "Bash(wget * | bash)",
-      "Bash(git commit*)",
-      "Bash(git push*)"
+      "Bash(wget * | bash)"
     ]
   },
   "env": {
