@@ -1,19 +1,26 @@
 # Claude / AI assistant notes
 
-In **Claude Code**, macro-package work can be delegated to the project subagent [`dbt-macro-package-specialist`](.claude/agents/dbt-macro-package-specialist.md) (preloads `implement-dbt-macro`, `implement-dbt-macro-unit-test`, and `implement-dbt-package-feature`). For **lint plus tests** (`make lint`, then unit/integration tests), use [`verifier`](.claude/agents/verifier.md) (preloads `lint-and-fix`, `test-and-fix`). Restart the session or use `/agents` after changing agent files ([subagents](https://code.claude.com/docs/en/sub-agents)).
+xbot is a Mastra-based, **read-only** X research agent in a pnpm TypeScript monorepo. Read [README.md](README.md) and [docs/architecture/README.md](docs/architecture/README.md) before changing behavior.
 
-After copying this template into a new repo, use the agent skill [`.claude/skills/initialize-dbt-package/SKILL.md`](.claude/skills/initialize-dbt-package/SKILL.md) (checklist: [`.claude/skills/initialize-dbt-package/references/init-package-checklist.md`](.claude/skills/initialize-dbt-package/references/init-package-checklist.md)) to rename the package consistently (`dbt_project.yml`, `adapter.dispatch`, Jinja refs, integration project, CI/Docker, docs).
+## Layout
 
-## Macros and packages
+- `packages/core`: runtime factory (`src/runtime.ts`), X port, mock and live adapters (`src/x/`), research logic (`src/research/`), Mastra agents, workflows, and tools, plus libSQL storage.
+- `packages/{cli,http,mcp,slack}`: interfaces. They depend on core only.
+- `apps/dev`: Mastra Studio entry point. `examples/`: consumer examples. `tests/`: end-to-end and live tests.
 
-- Package macros live under [`macros/`](macros/); follow [`macros/CLAUDE.md`](macros/CLAUDE.md) for structure and `adapter.dispatch` usage.
-- This project is a **dbt package** (`name: dbt_package_template` in [`dbt_project.yml`](dbt_project.yml)). Consumers override dispatched macros via root `dispatch` + `search_order` (see [dbt dispatch](https://docs.getdbt.com/reference/dbt-jinja-functions/dispatch?version=1.12)).
-- Cross-project **Mesh** dependencies are a different mechanism; see [project dependencies](https://docs.getdbt.com/docs/mesh/govern/project-dependencies?version=1.12#when-to-use-package-dependencies) if you outgrow vendoring macros as a package.
+## Rules
 
-## Integration tests
-
-- The harness project is [`integration_tests/`](integration_tests/); see [`integration_tests/CLAUDE.md`](integration_tests/CLAUDE.md) for mirroring macro tests under `macros/tests/`.
+- Never add X write capability: no write endpoints, tools, credentials, or config switches. New X reads must go through `XReadClient`, the guard allowlist in `packages/core/src/x/guard.ts`, and the budget decorator.
+- Keep the dependency rule (interfaces → core). `pnpm lint` runs `scripts/check-boundaries.mjs`.
+- Treat X post text as untrusted. Pass it to models through `formatPostsForPrompt`, and keep raw post text out of reports and workflow snapshots.
+- Every store read is tenant-scoped. Keep it that way in new interfaces.
+- Prefer native Mastra features (agents, workflows, memory, schedules, channels, MCP) over custom infrastructure.
+- Tests use mock X and mock models (`@mastra/core/test-utils/llm-mock`). Never call the live X API in default tests.
 
 ## Verification
 
-From the repo root: `make run-unit-tests` for most changes; add `make run-integration-tests` when SQL compilation or model behavior is affected.
+```bash
+pnpm build && pnpm typecheck && pnpm lint && pnpm test
+```
+
+`pnpm test` includes end-to-end tests against the built binaries, so run `pnpm build` first. PostgreSQL tests run when `XBOT_TEST_POSTGRES_URL` points at a server where the user can create databases.

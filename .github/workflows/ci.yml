@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Biome + dependency boundaries
+        run: pnpm lint
+
+  build-and-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: xbot
+          POSTGRES_PASSWORD: xbot
+          POSTGRES_DB: xbot
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U xbot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build packages
+        run: pnpm build
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Unit, workflow, interface, end-to-end, and PostgreSQL tests (mock X, mock models)
+        env:
+          XBOT_TEST_POSTGRES_URL: postgres://xbot:xbot@localhost:5432/xbot
+        run: pnpm test
+
+  consumer-smoke:
+    # Installs packed tarballs into a clean project to catch monorepo-relative imports.
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: bash scripts/consumer-smoke.sh

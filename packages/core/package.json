@@ -1,0 +1,61 @@
+{
+  "name": "@yu-iskw/xbot-core",
+  "version": "0.1.0",
+  "description": "Mastra-based, read-only X research agent: runtime, agents, workflows, tools, and storage.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yu-iskw/xbot.git",
+    "directory": "packages/core"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.18.0",
+    "@mastra/core": "^1.79.0",
+    "@mastra/libsql": "^1.27.0",
+    "@mastra/memory": "^1.39.0",
+    "@xdevplatform/xdk": "^0.6.6",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@mastra/pg": "^1.32.0",
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.1"
+  },
+  "peerDependencies": {
+    "@mastra/pg": "^1.32.0",
+    "pg": "^8.22.0"
+  },
+  "peerDependenciesMeta": {
+    "@mastra/pg": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    }
+  }
+}

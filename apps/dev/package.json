@@ -1,0 +1,19 @@
+{
+  "name": "@xbot/dev",
+  "private": true,
+  "type": "module",
+  "description": "Local Mastra Studio entry point for developing xbot. Not published.",
+  "scripts": {
+    "dev": "mastra dev --dir src/mastra"
+  },
+  "dependencies": {
+    "@mastra/core": "^1.79.0",
+    "@mastra/libsql": "^1.27.0",
+    "@mastra/memory": "^1.39.0",
+    "@yu-iskw/xbot-core": "workspace:*",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "mastra": "^1.35.0"
+  }
+}

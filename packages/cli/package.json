@@ -1,0 +1,45 @@
+{
+  "name": "@yu-iskw/xbot-cli",
+  "version": "0.1.0",
+  "description": "Command-line REPL and one-shot commands for the xbot X research agent.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yu-iskw/xbot.git",
+    "directory": "packages/cli"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "bin": {
+    "xbot": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@yu-iskw/xbot-core": "workspace:*",
+    "commander": "^15.0.0"
+  },
+  "devDependencies": {
+    "@mastra/core": "^1.79.0"
+  }
+}

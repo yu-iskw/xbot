@@ -1,65 +1,107 @@
-# dbt-package-template
+# xbot
 
-**`dbt_package_template`** is a dbt package of reusable **macros**. Add it as a dependency in your dbt project, run `dbt deps`, and call macros from the `dbt_package_template` namespace.
+A modular, open-source **X (Twitter) research agent** built on [Mastra](https://mastra.ai).
 
-If you maintain this repository (template author or fork), see [CONTRIBUTING.md](./CONTRIBUTING.md) for tests, linting, and development layout.
+xbot researches public conversations on X and produces **structured, evidence-backed reports** with citations. It is **strictly read-only on X**: it can search and read posts, but there is no code path that posts, replies, likes, reposts, or modifies anything on X.
 
-## Installation
+The research agent is a library. The CLI, HTTP API, MCP server, and Slack bot are separate packages that use the same agent and workflows.
 
-In your **root** dbt project, add a [package](https://docs.getdbt.com/docs/build/packages) entry. For example, to install from Git (replace `YOUR_ORG` / `YOUR_REPO` with your fork or published copy):
-
-```yaml
-packages:
-  - git: "https://github.com/YOUR_ORG/YOUR_REPO.git"
-    revision: main # or a tag / SHA
+```text
+ CLI (REPL + commands)   HTTP (REST + SSE)   MCP (stdio + HTTP)   Slack (Mastra Channels)
+            \                    |                   |                    /
+             └──────────── @yu-iskw/xbot-core (Mastra runtime) ──────────┘
+                    agents · workflows · tools · memory · budgets
+                         /                              \
+              X read-only adapter                 persistence (libSQL)
+              (official SDK / mock)
 ```
 
-Then run:
+## Packages
+
+| Package                                 | What it is                                                                                    |
+| --------------------------------------- | --------------------------------------------------------------------------------------------- |
+| [`@yu-iskw/xbot-core`](packages/core)   | Mastra agents, research and discovery workflows, read-only X tools, budgets, storage, schemas |
+| [`@yu-iskw/xbot-cli`](packages/cli)     | `xbot` command: interactive REPL, one-shot research, history, workflows, `doctor`             |
+| [`@yu-iskw/xbot-http`](packages/http)   | `xbot-http`: authenticated REST API with SSE chat streaming                                   |
+| [`@yu-iskw/xbot-mcp`](packages/mcp)     | `xbot-mcp`: MCP server over stdio or authenticated Streamable HTTP                            |
+| [`@yu-iskw/xbot-slack`](packages/slack) | `xbot-slack`: Slack bot via Mastra Channels, with user allowlists and quotas                  |
+
+Interfaces depend only on core; core never imports an interface. `pnpm lint` enforces this.
+
+## Quickstart (no credentials needed)
 
 ```bash
-dbt deps
+pnpm install
+pnpm build
+node packages/cli/dist/bin.js research "What are developers discussing about Mastra?" --mock
 ```
 
-Published **dbt Hub** or **private registry** installs follow the same pattern using the URL or package name your registry provides.
+This runs the real Mastra research workflow (plan → collect → analyze → validate → save) against deterministic X fixtures, prints a cited Markdown report, and saves it to `~/.xbot/xbot.db`. No model, X credentials, server, or Slack are needed: without a model, planning and analysis use deterministic implementations.
 
-## Requirements
-
-- **dbt Core** **1.10 or newer** (see `require-dbt-version` in this package’s [`dbt_project.yml`](./dbt_project.yml)).
-- Your project should use an adapter this package is exercised against: **Postgres** or **DuckDB** (see [Supported warehouses](#supported-warehouses)). Other adapters may work if SQL is portable, but are not covered by this package’s test harness.
-
-Developing the package locally (tests, Docker, `uv`, pre-commit) is documented in [CONTRIBUTING.md](./CONTRIBUTING.md).
-
-## Supported warehouses
-
-This package is tested on:
-
-- Postgres
-- DuckDB
-
-## What is in this package
-
-- **Macros** under [`macros/`](./macros), including the starter [`normalize_text`](./macros/example/normalize_text.sql) implementation.
-- **Macro documentation** for **dbt docs** in [`macros/properties.yml`](./macros/properties.yml) (surfaced when your project runs `dbt docs generate` and includes this package).
-
-## Macros
-
-### `normalize_text`
-
-`normalize_text(expression)` returns a **SQL expression** (fragment) that:
-
-- casts the value to the adapter string type
-- lowercases it
-- trims surrounding whitespace
-- converts empty strings to `null`
-
-**Example** (in a model or analysis):
-
-```sql
-select
-  {{ dbt_package_template.normalize_text("customer_name") }} as normalized_name
-from {{ ref("my_customers") }}
+```bash
+xbot research "LLMOps trends" --format json --out report.json
+xbot history list
+xbot history show <reportId>
+xbot workflow run discover --interest "AI agents" --interest "LLMOps"
+xbot monitor <topicId>   # research a configured topic and show what changed since last time
+xbot chat            # needs a chat model (XBOT_MODEL)
+xbot doctor
 ```
 
-Use any column or SQL expression in place of `"customer_name"` (quoted identifiers are Jinja string arguments to the macro, not literal SQL quotes around the column).
+To use real data and models, see [docs/quickstart](docs/quickstart/README.md). The main settings:
 
-For **overriding** dispatched macros and how **dbt docs** surfaces macro metadata from this package, see [CONTRIBUTING.md — Downstream projects: overrides and dbt docs](./CONTRIBUTING.md#downstream-projects-overrides-and-dbt-docs).
+| Variable                                      | Purpose                                                                                                                   |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `X_BEARER_TOKEN`                              | App-only OAuth 2.0 bearer token. When set, X mode is live.                                                                |
+| `XBOT_MODEL`                                  | Default model in Mastra `provider/model-id` format. `XBOT_MODEL_{CHAT,PLANNING,ANALYSIS,REPORTING}` override it per task. |
+| `XBOT_DB_URL`                                 | libSQL URL (default `file:~/.xbot/xbot.db` for the CLI) or `postgres://` connection string for production.                |
+| `XBOT_BUDGET_{RUN,REQUEST,DAILY,MONTHLY}_USD` | X spending limits (defaults: $1 / $0.50 / $5 / $50).                                                                      |
+
+See [.env.example](.env.example) for the full list.
+
+## Library usage
+
+```ts
+import { createXbotRuntime, renderReportMarkdown } from "@yu-iskw/xbot-core";
+
+const runtime = await createXbotRuntime({
+  x: { mode: "mock" },
+  models: { default: process.env.XBOT_MODEL }, // optional
+  storage: { url: "file:./xbot.db" },
+});
+const { report } = await runtime.research({ query: "AI agent frameworks", maxPosts: 50 });
+console.log(renderReportMarkdown(report));
+await runtime.close();
+```
+
+## Guarantees
+
+- **Read-only on X, enforced in code.** Only five GET operations exist (`searchRecent`, `searchArchive`, `getPosts`, `getUserByUsername`, `getUserPosts`). The runtime exposes them through a frozen allowlisted facade, and a network guard installed under the official SDK refuses anything other than the allowlisted GET endpoints. Only app-only bearer tokens are accepted.
+- **Evidence-backed reports.** A deterministic validator removes any citation that is not in the collected evidence and drops findings left unsupported. Reports store post IDs, URLs, and timestamps, not post text.
+- **Bounded spending.** Every X request is checked against per-run, per-request, daily, and monthly budgets before it is sent. LLM-proposed plans are clamped by code.
+- **Idempotent triggers.** Runs started by an event (Slack event, schedule occurrence, HTTP idempotency key) return the original report when replayed.
+- **Tenant isolation.** Runs, reports, and chat threads are scoped by tenant in every interface.
+- **Untrusted content.** Post text reaches models only inside delimited data blocks, and nothing a post says can grant new capabilities.
+
+## Development
+
+```bash
+pnpm install
+pnpm build         # all packages (tsup)
+pnpm typecheck
+pnpm lint          # Biome + dependency boundary check
+pnpm test          # vitest: unit, workflow, interface, and end-to-end (mock X, mock models)
+pnpm --filter @xbot/dev dev   # Mastra Studio on http://localhost:4111
+```
+
+Live X tests run only in the manually started `Live X smoke test` workflow.
+
+## Documentation
+
+- [Architecture](docs/architecture/README.md)
+- [Quickstart](docs/quickstart/README.md)
+- [HTTP, MCP, and Slack interfaces](docs/api/README.md)
+
+## License
+
+Apache-2.0

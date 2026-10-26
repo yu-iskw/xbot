@@ -1,0 +1,11 @@
+{
+  "name": "@xbot/example-basic-research",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "@yu-iskw/xbot-core": "workspace:*"
+  }
+}
