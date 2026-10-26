@@ -70,11 +70,18 @@ export interface RunUsage {
 
 interface RunBudget extends RunUsage {
   limitUsd: number;
+  /** Estimates for calls that have been approved and have not settled yet. */
+  reservedUsd: number;
+}
+
+interface Hold {
+  usd: number;
+  runId?: string;
 }
 
 const EMPTY_USAGE: RunUsage = { requests: 0, posts: 0, users: 0, costUsd: 0, cacheHits: 0 };
 
-function snapshot({ limitUsd: _, ...usage }: RunBudget): RunUsage {
+function snapshot({ limitUsd: _, reservedUsd: __, ...usage }: RunBudget): RunUsage {
   return usage;
 }
 
@@ -105,6 +112,9 @@ export class BudgetedXReadClient implements XReadClient {
   readonly #now: () => Date;
   readonly #enforcePeriodLimits: boolean;
   readonly #runs = new Map<string, RunBudget>();
+  /** Approved estimates that are not in the ledger yet. Period checks subtract these. */
+  readonly #holds: Hold[] = [];
+  #queue: Promise<void> = Promise.resolve();
 
   constructor(options: BudgetedXReadClientOptions) {
     this.#inner = options.inner;
@@ -125,7 +135,7 @@ export class BudgetedXReadClient implements XReadClient {
 
   /** Start tracking a run. Requests carrying this runId are held to `runLimit(limitUsd)`. */
   openRun(runId: string, limitUsd?: number): void {
-    this.#runs.set(runId, { ...EMPTY_USAGE, limitUsd: this.runLimit(limitUsd) });
+    this.#runs.set(runId, { ...EMPTY_USAGE, limitUsd: this.runLimit(limitUsd), reservedUsd: 0 });
   }
 
   /** Stop tracking a run and return what it consumed. */
@@ -176,17 +186,30 @@ export class BudgetedXReadClient implements XReadClient {
     const run = ctx?.runId ? this.#runs.get(ctx.runId) : undefined;
     if (run) run.cacheHits += cached.length;
     if (missing.length === 0) return cached;
-    await this.#authorize(this.estimate(missing.length, 0), ctx);
-    const fetched = await this.#inner.getPosts(missing, ctx);
-    await Promise.all([this.#settle("getPosts", fetched.length, 0, ctx, 1), this.#cachePosts(fetched)]);
-    return [...cached, ...fetched];
+    // Author expansions are requested, so the worst case is one user read per post.
+    const hold = await this.#authorize(this.estimate(missing.length), ctx);
+    try {
+      const fetched = await this.#inner.getPosts(missing, ctx);
+      const users = new Set(fetched.flatMap((post) => (post.authorId ? [post.authorId] : []))).size;
+      await this.#settle("getPosts", fetched.length, users, ctx, 1, hold);
+      await this.#cachePosts(fetched);
+      return [...cached, ...fetched];
+    } catch (error) {
+      await this.#release(hold);
+      throw error;
+    }
   }
 
   async getUserByUsername(username: string, ctx?: XRequestContext): Promise<XUser> {
-    await this.#authorize(this.estimate(0, 1), ctx);
-    const user = await this.#inner.getUserByUsername(username, ctx);
-    await this.#settle("getUserByUsername", 0, 1, ctx, 1);
-    return user;
+    const hold = await this.#authorize(this.estimate(0, 1), ctx);
+    try {
+      const user = await this.#inner.getUserByUsername(username, ctx);
+      await this.#settle("getUserByUsername", 0, 1, ctx, 1, hold);
+      return user;
+    } catch (error) {
+      await this.#release(hold);
+      throw error;
+    }
   }
 
   getUserPosts(input: UserPostsInput, ctx?: XRequestContext): Promise<SearchResult> {
@@ -201,45 +224,63 @@ export class BudgetedXReadClient implements XReadClient {
     ctx: XRequestContext | undefined,
     call: () => Promise<SearchResult>,
   ): Promise<SearchResult> {
-    await this.#authorize(this.estimate(r.maxResults * r.maxPages), ctx);
-    const result = await call();
-    await Promise.all([
-      this.#settle(operation, result.posts.length, result.users.length, ctx, result.pages),
-      this.#cachePosts(result.posts),
-    ]);
-    return result;
+    const hold = await this.#authorize(this.estimate(r.maxResults * r.maxPages), ctx);
+    try {
+      const result = await call();
+      await this.#settle(operation, result.posts.length, result.users.length, ctx, result.pages, hold);
+      await this.#cachePosts(result.posts);
+      return result;
+    } catch (error) {
+      await this.#release(hold);
+      throw error;
+    }
   }
 
-  async #authorize(estimatedUsd: number, ctx?: XRequestContext): Promise<void> {
-    const run = ctx?.runId ? this.#runs.get(ctx.runId) : undefined;
-    if (run) {
-      if (run.costUsd + estimatedUsd > run.limitUsd + 1e-9) {
+  /**
+   * Approve one estimate. The hold stays until the call settles or fails, so a second caller cannot
+   * spend the same remaining balance.
+   */
+  async #authorize(estimatedUsd: number, ctx?: XRequestContext): Promise<Hold> {
+    const hold: Hold = { usd: estimatedUsd, ...(ctx?.runId ? { runId: ctx.runId } : {}) };
+    await this.#exclusive(async () => {
+      const run = hold.runId ? this.#runs.get(hold.runId) : undefined;
+      if (run) {
+        const available = run.limitUsd - run.costUsd - run.reservedUsd;
+        if (estimatedUsd > available + 1e-9) {
+          throw new XApiError(
+            `Run budget exceeded: request may cost $${estimatedUsd.toFixed(3)}, ` +
+              `$${Math.max(0, available).toFixed(3)} of $${run.limitUsd.toFixed(2)} remaining`,
+            "budget_exceeded",
+          );
+        }
+      } else if (estimatedUsd > this.limits.perRequestUsd + 1e-9) {
         throw new XApiError(
-          `Run budget exceeded: request may cost $${estimatedUsd.toFixed(3)}, ` +
-            `$${(run.limitUsd - run.costUsd).toFixed(3)} of $${run.limitUsd.toFixed(2)} remaining`,
+          `Request may cost $${estimatedUsd.toFixed(3)}, above the per-request cap of $${this.limits.perRequestUsd.toFixed(2)}`,
           "budget_exceeded",
         );
       }
-    } else if (estimatedUsd > this.limits.perRequestUsd + 1e-9) {
-      throw new XApiError(
-        `Request may cost $${estimatedUsd.toFixed(3)}, above the per-request cap of $${this.limits.perRequestUsd.toFixed(2)}`,
-        "budget_exceeded",
-      );
-    }
-    if (!this.#enforcePeriodLimits) return;
-    const remaining = await this.remaining();
-    if (estimatedUsd > remaining.dailyUsd + 1e-9) {
-      throw new XApiError(
-        `Daily X budget exhausted ($${Math.max(0, remaining.dailyUsd).toFixed(3)} left)`,
-        "budget_exceeded",
-      );
-    }
-    if (estimatedUsd > remaining.monthlyUsd + 1e-9) {
-      throw new XApiError(
-        `Monthly X budget exhausted ($${Math.max(0, remaining.monthlyUsd).toFixed(3)} left)`,
-        "budget_exceeded",
-      );
-    }
+      if (this.#enforcePeriodLimits) {
+        const remaining = await this.remaining();
+        const reserved = this.#heldUsd();
+        const dailyLeft = remaining.dailyUsd - reserved;
+        const monthlyLeft = remaining.monthlyUsd - reserved;
+        if (estimatedUsd > dailyLeft + 1e-9) {
+          throw new XApiError(
+            `Daily X budget exhausted ($${Math.max(0, dailyLeft).toFixed(3)} left)`,
+            "budget_exceeded",
+          );
+        }
+        if (estimatedUsd > monthlyLeft + 1e-9) {
+          throw new XApiError(
+            `Monthly X budget exhausted ($${Math.max(0, monthlyLeft).toFixed(3)} left)`,
+            "budget_exceeded",
+          );
+        }
+      }
+      this.#holds.push(hold);
+      if (run) run.reservedUsd = round(run.reservedUsd + estimatedUsd);
+    });
+    return hold;
   }
 
   async #settle(
@@ -248,24 +289,61 @@ export class BudgetedXReadClient implements XReadClient {
     users: number,
     ctx: XRequestContext | undefined,
     pages: number,
+    hold: Hold,
   ) {
     const costUsd = this.estimate(posts, users);
-    const run = ctx?.runId ? this.#runs.get(ctx.runId) : undefined;
-    if (run) {
-      run.requests += pages;
-      run.posts += posts;
-      run.users += users;
-      run.costUsd = round(run.costUsd + costUsd);
-    }
-    await this.#usage.recordUsage({
-      ...(ctx?.runId ? { runId: ctx.runId } : {}),
-      operation,
-      posts,
-      users,
-      costUsd,
-      mode: this.mode,
-      at: this.#now().toISOString(),
+    await this.#exclusive(async () => {
+      this.#drop(hold);
+      const run = ctx?.runId ? this.#runs.get(ctx.runId) : undefined;
+      if (run) {
+        run.requests += pages;
+        run.posts += posts;
+        run.users += users;
+        run.costUsd = round(run.costUsd + costUsd);
+      }
+      await this.#usage.recordUsage({
+        ...(ctx?.runId ? { runId: ctx.runId } : {}),
+        operation,
+        posts,
+        users,
+        costUsd,
+        mode: this.mode,
+        at: this.#now().toISOString(),
+      });
     });
+  }
+
+  async #release(hold: Hold): Promise<void> {
+    await this.#exclusive(async () => {
+      this.#drop(hold);
+    });
+  }
+
+  #drop(hold: Hold): void {
+    const index = this.#holds.indexOf(hold);
+    if (index < 0) return;
+    this.#holds.splice(index, 1);
+    const run = hold.runId ? this.#runs.get(hold.runId) : undefined;
+    if (run) run.reservedUsd = round(Math.max(0, run.reservedUsd - hold.usd));
+  }
+
+  #heldUsd(): number {
+    return this.#holds.reduce((sum, hold) => sum + hold.usd, 0);
+  }
+
+  /** Run budget decisions one at a time. The X call itself stays outside this queue. */
+  async #exclusive<T>(body: () => Promise<T>): Promise<T> {
+    const previous = this.#queue;
+    let unlock = () => {};
+    this.#queue = new Promise<void>((resolve) => {
+      unlock = resolve;
+    });
+    await previous;
+    try {
+      return await body();
+    } finally {
+      unlock();
+    }
   }
 
   async #cachePosts(posts: XPost[]): Promise<void> {

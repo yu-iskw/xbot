@@ -42,7 +42,7 @@ Values are Mastra model router strings (`provider/model-id`) or model instances.
 
 ## Budgets and cost
 
-`BudgetedXReadClient` estimates the worst-case cost of each request (`posts × $0.005 + users × $0.010` by default, configurable) and refuses it if it would exceed the run cap (requests inside a run), the per-request cap (requests outside a run, such as chat tool calls), or the remaining UTC daily or monthly budget. Actual spend is written to `xbot_usage`, which every interface shares. Mock mode keeps run caps but skips daily and monthly limits. Estimates ignore X's 24-hour deduplication window, so they err high.
+`BudgetedXReadClient` estimates the worst-case cost of each request (`posts × $0.005 + users × $0.010` by default, configurable) and refuses it if it would exceed the run cap (requests inside a run), the per-request cap (requests outside a run, such as chat tool calls), or the remaining UTC daily or monthly budget. The estimate is reserved until the request settles or fails, so overlapping calls cannot spend the same remaining balance. Actual spend is written to `xbot_usage`, which every interface shares. Mock mode keeps run caps but skips daily and monthly limits. Estimates ignore X's 24-hour deduplication window, so they err high. Post lookup counts one user read per distinct author, because the request expands authors.
 
 ## Persistence
 

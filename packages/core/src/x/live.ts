@@ -233,9 +233,9 @@ function installReadOnlyHttp(sdk: Client, guarded: typeof fetch): void {
   holder.httpClient = http;
 }
 
-/** Page size, time window, and pagination token for list endpoints. */
+/** Page size, time window, sort, and pagination token for list endpoints. */
 function page(
-  input: { maxResults: number; startTime?: string; endTime?: string },
+  input: { maxResults: number; startTime?: string; endTime?: string; sortOrder?: "recency" | "relevancy" },
   token: string | undefined,
   tokenKey: "nextToken" | "paginationToken",
 ) {
@@ -243,6 +243,7 @@ function page(
     maxResults: input.maxResults,
     startTime: input.startTime,
     endTime: input.endTime,
+    ...(input.sortOrder ? { sortOrder: input.sortOrder } : {}),
     ...(token ? { [tokenKey]: token } : {}),
   };
 }

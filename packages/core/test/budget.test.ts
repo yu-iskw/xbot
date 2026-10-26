@@ -93,4 +93,57 @@ describe("BudgetedXReadClient", () => {
     );
     expect(client.runUsage("r1")?.cacheHits).toBe(res.posts.length);
   });
+
+  it("reserves an in-flight estimate so a second call cannot spend the same balance", async () => {
+    let release = () => {};
+    let entered = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const inner = new MockXReadClient({ now: fixedNow });
+    const search = inner.searchRecent.bind(inner);
+    inner.searchRecent = (input, ctx) => {
+      entered();
+      return gate.then(() => search(input, ctx));
+    };
+    const store = new LibSqlXbotStore({ url: ":memory:" });
+    await store.init();
+    const client = new BudgetedXReadClient({
+      inner,
+      usage: store,
+      limits: { dailyUsd: 0.2, perRequestUsd: 1, monthlyUsd: 50 },
+      now: fixedNow,
+    });
+    expect(client.estimate(10) * 2).toBeGreaterThan(0.2);
+    const first = client.searchRecent({ query: "the", maxResults: 10 });
+    await started;
+    const second = await Promise.allSettled([client.searchRecent({ query: "the", maxResults: 10 })]);
+    release();
+    await expect(first).resolves.toBeDefined();
+    expect(second[0]?.status).toBe("rejected");
+  });
+
+  it("releases the estimate when the request fails", async () => {
+    const inner = new MockXReadClient({ now: fixedNow });
+    const search = inner.searchRecent.bind(inner);
+    let calls = 0;
+    inner.searchRecent = (input, ctx) => {
+      calls += 1;
+      if (calls === 1) return Promise.reject(new Error("down"));
+      return search(input, ctx);
+    };
+    const store = new LibSqlXbotStore({ url: ":memory:" });
+    await store.init();
+    const client = new BudgetedXReadClient({
+      inner,
+      usage: store,
+      limits: { dailyUsd: 0.2, perRequestUsd: 1, monthlyUsd: 50 },
+      now: fixedNow,
+    });
+    await expect(client.searchRecent({ query: "the", maxResults: 10 })).rejects.toThrow("down");
+    await expect(client.searchRecent({ query: "the", maxResults: 10 })).resolves.toBeDefined();
+  });
 });
