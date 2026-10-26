@@ -1,4 +1,5 @@
 ---
+
 name: verify-xbot
 description: "Drive the xbot CLI the way a user does and prove mock-mode research, history, discovery, topic monitoring, and doctor against the built binary. Use when a change to the xbot CLI or research workflow needs a scripted behavior check."
 ---
