@@ -32,8 +32,6 @@ export interface ResearchWorkflowDeps {
   store: XbotStore;
   agents: { planner?: Agent; analyst?: Agent; reporter?: Agent };
   modelMetadata: z.infer<typeof ModelMetadataSchema>;
-  /** Run-scoped evidence kept in process so raw post text never enters workflow snapshots. */
-  evidence: Map<string, XPost[]>;
   now: () => Date;
 }
 
@@ -106,9 +104,11 @@ export function admitResearchRun(
 
 export function createResearchWorkflow(deps: ResearchWorkflowDeps) {
   const { x, store, agents, now } = deps;
+  // Raw post text stays in this process. Workflow snapshots only carry post ids.
+  const evidenceByRun = new Map<string, XPost[]>();
 
   function fail(runId: string, error: unknown): Promise<never> {
-    deps.evidence.delete(runId);
+    evidenceByRun.delete(runId);
     return failRun(deps, runId, error);
   }
 
@@ -180,7 +180,7 @@ export function createResearchWorkflow(deps: ResearchWorkflowDeps) {
       const { runId, plan: researchPlan } = inputData;
       try {
         const evidence = await collectEvidence(x, researchPlan, { runId, signal: abortSignal });
-        deps.evidence.set(runId, evidence.posts);
+        evidenceByRun.set(runId, evidence.posts);
         return {
           ...inputData,
           postIds: evidence.posts.map((p) => p.id),
@@ -203,7 +203,7 @@ export function createResearchWorkflow(deps: ResearchWorkflowDeps) {
       if (inputData.duplicate || !inputData.plan) return inputData;
       const { runId, input } = inputData;
       try {
-        const posts = await loadEvidence(deps, runId, inputData.postIds);
+        const posts = await loadEvidence(deps, evidenceByRun, runId, inputData.postIds);
         const notes = [...inputData.notes];
         let analysis = deterministicAnalysis(input.query, posts, inputData.queriesRun);
         if (agents.analyst && posts.length > 0) {
@@ -241,7 +241,7 @@ export function createResearchWorkflow(deps: ResearchWorkflowDeps) {
       try {
         if (!inputData.plan || !inputData.analysis)
           throw new Error("Research run is missing its plan or analysis");
-        const posts = await loadEvidence(deps, runId, inputData.postIds);
+        const posts = await loadEvidence(deps, evidenceByRun, runId, inputData.postIds);
         const usage = x.runUsage(runId) ?? { requests: 0, costUsd: 0 };
         const built = buildReport({
           id: newId("rpt"),
@@ -277,7 +277,7 @@ export function createResearchWorkflow(deps: ResearchWorkflowDeps) {
           output: { reportId: built.id, usage: x.closeRun(runId) },
           completedAt: now().toISOString(),
         });
-        deps.evidence.delete(runId);
+        evidenceByRun.delete(runId);
         return {
           runId,
           runStatus: "completed" as const,
@@ -306,8 +306,13 @@ export function createResearchWorkflow(deps: ResearchWorkflowDeps) {
     .commit();
 }
 
-async function loadEvidence(deps: ResearchWorkflowDeps, runId: string, ids: string[]): Promise<XPost[]> {
-  const memo = deps.evidence.get(runId);
+async function loadEvidence(
+  deps: ResearchWorkflowDeps,
+  evidenceByRun: Map<string, XPost[]>,
+  runId: string,
+  ids: string[],
+): Promise<XPost[]> {
+  const memo = evidenceByRun.get(runId);
   if (memo) return memo;
   // After a process restart the in-memory evidence is gone; fall back to the TTL-bound post cache.
   const cached = await deps.store.getCachedPosts(ids, deps.now().toISOString());

@@ -1,6 +1,6 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
-import { SearchResultSchema, XPostSchema, XUserSchema } from "../schemas/x";
+import { SearchResultSchema, X_USERNAME_RE, XPostSchema, XUserSchema } from "../schemas/x";
 import type { XReadClient } from "../x/port";
 
 const READ_ONLY_HINTS = {
@@ -45,7 +45,7 @@ export function createXTools(client: XReadClient) {
   const getUser = createTool({
     id: "x-get-user",
     description: "Look up a public X account profile by username.",
-    inputSchema: z.object({ username: z.string().regex(/^@?[A-Za-z0-9_]{1,15}$/) }),
+    inputSchema: z.object({ username: z.string().regex(X_USERNAME_RE) }),
     outputSchema: XUserSchema,
     mcp: READ_ONLY_HINTS,
     execute: async ({ username }, ctx) => client.getUserByUsername(username, { signal: ctx?.abortSignal }),
@@ -55,7 +55,7 @@ export function createXTools(client: XReadClient) {
     id: "x-get-user-posts",
     description: "Read recent public posts from an X account by username.",
     inputSchema: z.object({
-      username: z.string().regex(/^@?[A-Za-z0-9_]{1,15}$/),
+      username: z.string().regex(X_USERNAME_RE),
       maxResults: z.number().int().min(5).max(100).default(20),
     }),
     outputSchema: SearchResultSchema,

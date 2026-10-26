@@ -4,13 +4,14 @@ import {
   type DiscoveryInput,
   type DiscoveryResult,
   DiscoveryResultSchema,
+  type ReportSummary,
+  ReportSummarySchema,
   type ResearchInput,
   type ResearchReport,
   ResearchReportSchema,
   type TriggerType,
   TriggerTypeSchema,
 } from "../schemas/research";
-import type { ReportSummary } from "../storage/store";
 
 /** RequestContext keys interfaces set so shared tools act for the right tenant and trigger. */
 export const XBOT_TENANT_CONTEXT_KEY = "xbot.tenantId";
@@ -52,16 +53,6 @@ export function toolScope(ctx: ScopeSource | undefined): ToolScope {
     trigger: TriggerTypeSchema.catch("chat").parse(trigger),
   };
 }
-
-export const ReportSummarySchema = z.object({
-  id: z.string(),
-  runId: z.string(),
-  query: z.string(),
-  summary: z.string(),
-  status: z.enum(["completed", "partial"]),
-  generatedAt: z.string(),
-  sources: z.number(),
-});
 
 export function createResearchTools(ops: ResearchOperations) {
   const runResearch = createTool({

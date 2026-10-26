@@ -1,4 +1,4 @@
-import type { ResearchReport, ResearchRun, RunStatus, TriggerType } from "../schemas/research";
+import type { ReportSummary, ResearchReport, ResearchRun, RunStatus, TriggerType } from "../schemas/research";
 import type { XPost } from "../schemas/x";
 import type { PostCache, UsageStore } from "../x/budget";
 
@@ -24,16 +24,6 @@ export interface ListReportsOptions {
   /** Case-insensitive text match on query and summary. */
   search?: string;
   topicId?: string;
-}
-
-export interface ReportSummary {
-  id: string;
-  runId: string;
-  query: string;
-  summary: string;
-  status: ResearchReport["status"];
-  generatedAt: string;
-  sources: number;
 }
 
 export type EvidenceAvailability = "available" | "removed" | "unknown";

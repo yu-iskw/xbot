@@ -1,7 +1,10 @@
 import { RequestContext } from "@mastra/core/request-context";
 import { type HonoBindings, type HonoVariables, MastraServer } from "@mastra/hono";
 import {
+  DiscoveryInputSchema,
+  MonitorInputSchema,
   renderReportMarkdown,
+  ResearchInputSchema,
   XApiError,
   XBOT_TENANT_CONTEXT_KEY,
   XBOT_TRIGGER_CONTEXT_KEY,
@@ -25,30 +28,32 @@ export interface XbotHttpOptions {
   mastraApi?: boolean;
 }
 
-const ResearchBody = z.object({
-  query: z.string().trim().min(1).max(500),
+/** Client-supplied event id; replays with the same id return the original report. */
+const IdempotencyKeySchema = z.string().min(1).max(200).optional();
+
+const ResearchBody = ResearchInputSchema.pick({
+  query: true,
+  maxCostUsd: true,
+  language: true,
+}).extend({
+  // HTTP is stricter than the workflow schema on page size and topic ids.
   maxPosts: z.number().int().min(10).max(500).optional(),
   windowDays: z.number().int().min(1).max(7).optional(),
-  maxCostUsd: z.number().positive().optional(),
-  language: z.string().min(2).max(8).optional(),
   topicId: z.string().max(100).optional(),
-  /** Client-supplied event id; replays with the same id return the original report. */
-  idempotencyKey: z.string().min(1).max(200).optional(),
+  idempotencyKey: IdempotencyKeySchema,
   /** Wait for the report instead of returning 202 with a run id. */
   wait: z.boolean().default(false),
 });
 
-const DiscoveryBody = z.object({
-  interests: z.array(z.string().min(1).max(200)).min(1).max(20),
-  accounts: z.array(z.string().min(1).max(50)).max(20).optional(),
-  maxTopics: z.number().int().min(1).max(20).optional(),
-  windowDays: z.number().int().min(1).max(7).optional(),
-  idempotencyKey: z.string().min(1).max(200).optional(),
-});
+const DiscoveryBody = DiscoveryInputSchema.pick({
+  interests: true,
+  accounts: true,
+  maxTopics: true,
+  windowDays: true,
+}).extend({ idempotencyKey: IdempotencyKeySchema });
 
-const MonitorBody = z.object({
-  windowDays: z.number().int().min(1).max(7).optional(),
-  idempotencyKey: z.string().min(1).max(200).optional(),
+const MonitorBody = MonitorInputSchema.pick({ windowDays: true }).extend({
+  idempotencyKey: IdempotencyKeySchema,
 });
 
 const ChatBody = z.object({
@@ -64,22 +69,23 @@ type Env = { Bindings: HonoBindings; Variables: HonoVariables & AuthVariables };
 /** Build the xbot HTTP API as a Hono app. Interfaces call the shared runtime; no research logic lives here. */
 export async function createXbotHttpApp(options: XbotHttpOptions): Promise<Hono<Env>> {
   const { runtime } = options;
-  const hasTokens = options.tokens && Object.keys(options.tokens).length > 0;
-  if (!hasTokens && !options.insecureNoAuth) {
+  const tokens = options.tokens && Object.keys(options.tokens).length > 0 ? options.tokens : undefined;
+  if (!tokens && !options.insecureNoAuth) {
     throw new Error(
       "Refusing to start without API tokens. Set XBOT_HTTP_TOKEN(S) or pass insecureNoAuth for local development.",
     );
   }
   const app = new Hono<Env>();
 
+  // Registered before auth, and it returns without calling next(), so health stays public.
   app.get("/v1/health", (c) =>
     c.json({ status: "ok", xMode: runtime.info.xMode, chat: runtime.info.chatAvailable }),
   );
 
   // Everything other than health is authenticated, including Mastra's own routes when mounted.
-  if (hasTokens) {
-    const auth = bearerAuth<Env>(options.tokens!);
-    app.use("/v1/*", async (c, next) => (c.req.path === "/v1/health" ? next() : auth(c, next)));
+  if (tokens) {
+    const auth = bearerAuth<Env>(tokens);
+    app.use("/v1/*", auth);
     app.use("/api/*", auth);
   } else {
     app.use("*", async (c, next) => {
@@ -194,7 +200,8 @@ export async function createXbotHttpApp(options: XbotHttpOptions): Promise<Hono<
     if (!runtime.topics.some((t) => t.id === topicId)) {
       return c.json({ error: { code: "not_found", message: "Topic not found" } }, 404);
     }
-    const body = MonitorBody.parse(await c.req.json().catch(() => ({})));
+    const raw = await c.req.text();
+    const body = MonitorBody.parse(raw.trim() ? JSON.parse(raw) : {});
     const result = await runtime.monitor({
       topicId,
       trigger: "http",

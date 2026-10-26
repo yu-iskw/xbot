@@ -1,4 +1,12 @@
-import type { SearchInput, SearchResult, UserPostsInput, XPost, XUser } from "../schemas/x";
+import {
+  type ResolvedSearchInput,
+  type SearchInput,
+  SearchInputSchema,
+  type SearchResult,
+  type UserPostsInput,
+  type XPost,
+  type XUser,
+} from "../schemas/x";
 
 /**
  * The only X operations xbot may perform. Every one of them is an HTTP GET.
@@ -29,6 +37,19 @@ export interface XReadClient {
   getPosts(ids: string[], ctx?: XRequestContext): Promise<XPost[]>;
   getUserByUsername(username: string, ctx?: XRequestContext): Promise<XUser>;
   getUserPosts(input: UserPostsInput, ctx?: XRequestContext): Promise<SearchResult>;
+}
+
+/** Recent search rejects pages above 100. Archive search keeps the wider schema limit. */
+export function parseRecentSearch(input: SearchInput): ResolvedSearchInput {
+  const resolved = SearchInputSchema.parse(input);
+  if (resolved.maxResults > 100) {
+    throw new XApiError("Recent search allows at most 100 results per page", "invalid_request");
+  }
+  return resolved;
+}
+
+export function assertPostIdBatch(ids: string[]): void {
+  if (ids.length > 100) throw new XApiError("At most 100 post IDs per request", "invalid_request");
 }
 
 export class XApiError extends Error {

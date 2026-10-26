@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+/** X username, without anchors, so path allowlists and full-string checks share one pattern. */
+export const X_USERNAME_BODY = "[A-Za-z0-9_]{1,15}";
+export const X_USERNAME_BODY_RE = new RegExp(`^${X_USERNAME_BODY}$`);
+export const X_USERNAME_RE = new RegExp(`^@?${X_USERNAME_BODY}$`);
+
 /** Public engagement counters. Not every endpoint/access tier returns them. */
 export const PostMetricsSchema = z.object({
   likes: z.number().int().nonnegative().optional(),

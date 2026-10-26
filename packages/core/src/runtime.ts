@@ -16,13 +16,14 @@ import {
   type MonitorResult,
   type ResearchInput,
   ResearchInputSchema,
+  type ReportSummary,
   type ResearchReport,
   type ResearchRun,
   ResearchTopicSchema,
 } from "./schemas/research";
 import type { XPost } from "./schemas/x";
 import { openStorage } from "./storage/open";
-import type { ListReportsOptions, ReportSummary, XbotStore } from "./storage/store";
+import type { ListReportsOptions, XbotStore } from "./storage/store";
 import { createResearchTools, type ResearchOperations } from "./tools/research-tools";
 import { createXTools } from "./tools/x-tools";
 import { admitDiscoveryRun, createDiscoveryWorkflow } from "./workflows/discover";
@@ -127,7 +128,6 @@ export async function createXbotRuntime(config: XbotConfig = {}): Promise<XbotRu
     store,
     agents,
     modelMetadata,
-    evidence: new Map(),
     now,
   });
   const discoveryWorkflow = createDiscoveryWorkflow({ x, store, now });
@@ -203,7 +203,8 @@ export async function createXbotRuntime(config: XbotConfig = {}): Promise<XbotRu
       parsed,
       "Research",
     );
-    if (!output.report) return existingResearch((await store.getRun(output.runId, parsed.tenantId)) ?? run);
+    // prepare re-admits this same run id, so a successful workflow always carries its report.
+    if (!output?.report) throw new Error(`Research run ${run.id} produced no report`);
     return { runId: output.runId, report: output.report, deduplicated: output.deduplicated };
   }
 
@@ -218,9 +219,9 @@ export async function createXbotRuntime(config: XbotConfig = {}): Promise<XbotRu
   const tools = { ...createXTools(x), ...createResearchTools(ops) };
 
   const memory =
-    config.memory === false
-      ? undefined
-      : new Memory({ options: { lastMessages: config.memory?.lastMessages ?? 20 } });
+    chatModel && config.memory !== false
+      ? new Memory({ options: { lastMessages: config.memory?.lastMessages ?? 20 } })
+      : undefined;
   const agent = chatModel
     ? createResearchAgent({
         model: chatModel,
@@ -278,7 +279,8 @@ export async function createXbotRuntime(config: XbotConfig = {}): Promise<XbotRu
       const { parsed, acquired, run } = await admitResearch(input);
       if (acquired) {
         // Failures are recorded on the run row; callers observe them through getRun.
-        track(executeWorkflow(researchWorkflow, run.id, parsed, "Research")).catch(() => undefined);
+        // track() attaches the rejection handler that keeps this promise from going unhandled.
+        track(executeWorkflow(researchWorkflow, run.id, parsed, "Research"));
       }
       return { runId: run.id };
     },
@@ -330,14 +332,18 @@ function createXClient(config: XbotConfig, now: () => Date): XReadClient {
 }
 
 function topicSchedules(topics: z.output<typeof ResearchTopicSchema>[], tenantId: string): ScheduleEntry[] {
-  return topics
-    .filter((t) => t.schedule)
-    .map((t) => ({
-      id: t.id,
-      cron: t.schedule!.cron,
-      ...(t.schedule!.timezone ? { timezone: t.schedule!.timezone } : {}),
-      inputData: MonitorInputSchema.parse({ topicId: t.id, trigger: "schedule", tenantId }),
-    }));
+  return topics.flatMap((topic) => {
+    const schedule = topic.schedule;
+    if (!schedule) return [];
+    return [
+      {
+        id: topic.id,
+        cron: schedule.cron,
+        ...(schedule.timezone ? { timezone: schedule.timezone } : {}),
+        inputData: MonitorInputSchema.parse({ topicId: topic.id, trigger: "schedule", tenantId }),
+      },
+    ];
+  });
 }
 
 function redactUrl(url: string): string {

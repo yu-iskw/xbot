@@ -1,4 +1,9 @@
-import { type ResearchReport, ResearchReportSchema, type ResearchRun } from "../schemas/research";
+import {
+  type ReportSummary,
+  type ResearchReport,
+  ResearchReportSchema,
+  type ResearchRun,
+} from "../schemas/research";
 import { type XPost, XPostSchema } from "../schemas/x";
 import type { UsageRecord } from "../x/budget";
 import type { XClientMode } from "../x/port";
@@ -7,7 +12,6 @@ import type {
   CreateRunInput,
   EvidenceAvailability,
   ListReportsOptions,
-  ReportSummary,
   XbotStore,
 } from "./store";
 
@@ -213,7 +217,7 @@ export class SqlXbotStore implements XbotStore {
 
   async saveReport(report: ResearchReport, tenantId: string, topicId?: string): Promise<void> {
     await this.init();
-    const statements = [
+    const statements: SqlStatement[] = [
       {
         sql: `INSERT INTO xbot_reports (id, run_id, tenant_id, topic_id, query, summary, status, generated_at, body)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -229,33 +233,28 @@ export class SqlXbotStore implements XbotStore {
           JSON.stringify(report),
         ],
       },
-      ...report.sources.map((s) => ({
-        sql: `INSERT INTO xbot_evidence (report_id, post_id, source_url, retrieved_at) VALUES (?, ?, ?, ?)
-              ON CONFLICT DO NOTHING`,
-        args: [report.id, s.id, s.url, s.retrievedAt],
-      })),
     ];
+    const sources = firstBy(report.sources, (source) => source.id);
+    if (sources.length > 0) {
+      statements.push({
+        sql: `INSERT INTO xbot_evidence (report_id, post_id, source_url, retrieved_at)
+              VALUES ${valueTuples(sources.length, 4)}
+              ON CONFLICT DO NOTHING`,
+        args: sources.flatMap((source) => [report.id, source.id, source.url, source.retrievedAt]),
+      });
+    }
     await this.#db.batch(statements);
   }
 
   async getReport(id: string, tenantId: string): Promise<ResearchReport | undefined> {
-    await this.init();
-    const res = await this.#db.execute({
-      sql: "SELECT body FROM xbot_reports WHERE id = ? AND tenant_id = ?",
-      args: [id, tenantId],
-    });
-    const row = res.rows[0];
-    return row ? ResearchReportSchema.parse(JSON.parse(String(row.body))) : undefined;
+    return this.#readReport("SELECT body FROM xbot_reports WHERE id = ? AND tenant_id = ?", [id, tenantId]);
   }
 
   async latestReportForTopic(topicId: string, tenantId: string): Promise<ResearchReport | undefined> {
-    await this.init();
-    const res = await this.#db.execute({
-      sql: "SELECT body FROM xbot_reports WHERE topic_id = ? AND tenant_id = ? ORDER BY generated_at DESC LIMIT 1",
-      args: [topicId, tenantId],
-    });
-    const row = res.rows[0];
-    return row ? ResearchReportSchema.parse(JSON.parse(String(row.body))) : undefined;
+    return this.#readReport(
+      "SELECT body FROM xbot_reports WHERE topic_id = ? AND tenant_id = ? ORDER BY generated_at DESC LIMIT 1",
+      [topicId, tenantId],
+    );
   }
 
   async listReports(options: ListReportsOptions): Promise<ReportSummary[]> {
@@ -335,13 +334,14 @@ export class SqlXbotStore implements XbotStore {
     if (posts.length === 0) return;
     await this.init();
     const now = new Date().toISOString();
-    await this.#db.batch(
-      posts.map((p) => ({
-        sql: `INSERT INTO xbot_post_cache (post_id, body, cached_at, expires_at) VALUES (?, ?, ?, ?)
-              ON CONFLICT (post_id) DO UPDATE SET body = excluded.body, cached_at = excluded.cached_at, expires_at = excluded.expires_at`,
-        args: [p.id, JSON.stringify(p), now, expiresAtIso],
-      })),
-    );
+    // Last write wins, matching the previous per-row upsert. One statement is one round trip.
+    const unique = firstBy(posts, (post) => post.id, "last");
+    await this.#db.execute({
+      sql: `INSERT INTO xbot_post_cache (post_id, body, cached_at, expires_at)
+            VALUES ${valueTuples(unique.length, 4)}
+            ON CONFLICT (post_id) DO UPDATE SET body = excluded.body, cached_at = excluded.cached_at, expires_at = excluded.expires_at`,
+      args: unique.flatMap((post) => [post.id, JSON.stringify(post), now, expiresAtIso]),
+    });
   }
 
   async recordUsage(record: UsageRecord): Promise<void> {
@@ -371,6 +371,28 @@ export class SqlXbotStore implements XbotStore {
     });
     return { day: Number(res.rows[0]?.day ?? 0), month: Number(res.rows[0]?.month ?? 0) };
   }
+
+  async #readReport(sql: string, args: SqlValue[]): Promise<ResearchReport | undefined> {
+    await this.init();
+    const res = await this.#db.execute({ sql, args });
+    const row = res.rows[0];
+    return row ? ResearchReportSchema.parse(JSON.parse(String(row.body))) : undefined;
+  }
+}
+
+function valueTuples(rowCount: number, columns: number): string {
+  const row = `(${Array.from({ length: columns }, () => "?").join(", ")})`;
+  return Array.from({ length: rowCount }, () => row).join(", ");
+}
+
+/** Keep one row per key. `first` matches ON CONFLICT DO NOTHING; `last` matches DO UPDATE. */
+function firstBy<T>(rows: T[], key: (row: T) => string, which: "first" | "last" = "first"): T[] {
+  const chosen = new Map<string, T>();
+  for (const row of rows) {
+    const id = key(row);
+    if (which === "last" || !chosen.has(id)) chosen.set(id, row);
+  }
+  return [...chosen.values()];
 }
 
 function parseJson(value: unknown): unknown {
