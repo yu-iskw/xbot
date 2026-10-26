@@ -1,31 +1,24 @@
+.PHONY: install build typecheck lint format test check dev
+
+install:
+	pnpm install
+
+build:
+	pnpm build
+
+typecheck: build
+	pnpm typecheck
+
 lint:
-	uv run --group dev pre-commit run -a
+	pnpm lint
 
-update-pre-commit-hooks:
-	uv run --group dev pre-commit autoupdate
+format:
+	pnpm format
 
-######################################################################
-# Integration tests
-######################################################################
-setup-integration-tests:
-	$(MAKE) -C integration_tests setup
+test:
+	pnpm test
 
-run-unit-tests:
-	$(MAKE) -C integration_tests run-unit-tests
+check: lint typecheck test
 
-run-unit-tests-fusion:
-	$(MAKE) -C integration_tests run-unit-tests-fusion
-
-run-integration-tests:
-	$(MAKE) -C integration_tests run-integration-tests
-
-run-integration-tests-fusion:
-	$(MAKE) -C integration_tests run-integration-tests-fusion
-
-run-fusion-tests:
-	$(MAKE) -C integration_tests run-fusion-tests
-
-test-integration:
-	$(MAKE) -C integration_tests test
-
-test: run-unit-tests run-integration-tests
+dev:
+	pnpm --filter @xbot/dev dev

@@ -1,0 +1,46 @@
+{
+  "name": "@yu-iskw/xbot-http",
+  "version": "0.1.0",
+  "description": "HTTP API (REST + SSE streaming) for the xbot X research agent, built on Mastra and Hono.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yu-iskw/xbot.git",
+    "directory": "packages/http"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "bin": {
+    "xbot-http": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "@mastra/core": "^1.79.0",
+    "@mastra/hono": "^1.7.21",
+    "@yu-iskw/xbot-core": "workspace:*",
+    "hono": "^4.13.14",
+    "zod": "^4.6.7"
+  }
+}

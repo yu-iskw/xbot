@@ -1,9 +1,15 @@
-# dbt
-./dbt_packages/
-./logs/
-./target/
-
-*.egg-info/
+node_modules/
+dist/
+coverage/
+.mastra/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+.DS_Store
 
 # Claude
 .claude/settings.local.json

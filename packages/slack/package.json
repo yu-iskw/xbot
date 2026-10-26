@@ -1,0 +1,46 @@
+{
+  "name": "@yu-iskw/xbot-slack",
+  "version": "0.1.0",
+  "description": "Slack integration for the xbot X research agent via Mastra Channels.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yu-iskw/xbot.git",
+    "directory": "packages/slack"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "bin": {
+    "xbot-slack": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@chat-adapter/slack": "^4.43.0",
+    "@hono/node-server": "^2.1.5",
+    "@mastra/core": "^1.79.0",
+    "@mastra/hono": "^1.7.21",
+    "@yu-iskw/xbot-core": "workspace:*",
+    "hono": "^4.13.14"
+  }
+}
