@@ -1,8 +1,10 @@
 import {
   type ReportSummary,
+  ReportSummarySchema,
   type ResearchReport,
   ResearchReportSchema,
   type ResearchRun,
+  ResearchRunSchema,
 } from "../schemas/research";
 import { type XPost, XPostSchema } from "../schemas/x";
 import type { UsageRecord } from "../x/budget";
@@ -151,22 +153,23 @@ export class SqlXbotStore implements XbotStore {
       ],
     });
     if (inserted.rows[0]) return { acquired: true, run: rowToRun(inserted.rows[0]) };
-    // The caller already admitted this exact run (the runtime admits before starting the workflow).
-    const own = await this.#db.execute({ sql: "SELECT * FROM xbot_runs WHERE id = ?", args: [input.id] });
-    if (own.rows[0]) return { acquired: true, run: rowToRun(own.rows[0]) };
-    // The key is taken. A failed run may be retried by atomically flipping it back to running.
-    const retried = await this.#db.execute({
-      sql: `UPDATE xbot_runs SET status = 'running', error = NULL, started_at = ?, completed_at = NULL
-            WHERE idempotency_key = ? AND status = 'failed'
-            RETURNING *`,
-      args: [input.startedAt, input.idempotencyKey ?? null],
-    });
-    if (retried.rows[0]) return { acquired: true, run: rowToRun(retried.rows[0]) };
-    const existing = await this.#db.execute({
-      sql: "SELECT * FROM xbot_runs WHERE idempotency_key = ?",
-      args: [input.idempotencyKey ?? null],
-    });
-    return { acquired: false, run: rowToRun(existing.rows[0]!) };
+    // A failed run may be retried by atomically flipping it back to running. The key lookup is
+    // tenant-scoped so one tenant can never observe another tenant's run.
+    if (input.idempotencyKey) {
+      const retried = await this.#db.execute({
+        sql: `UPDATE xbot_runs SET status = 'running', error = NULL, started_at = ?, completed_at = NULL
+              WHERE idempotency_key = ? AND tenant_id = ? AND status = 'failed'
+              RETURNING *`,
+        args: [input.startedAt, input.idempotencyKey, input.tenantId],
+      });
+      if (retried.rows[0]) return { acquired: true, run: rowToRun(retried.rows[0]) };
+      const existing = await this.#db.execute({
+        sql: "SELECT * FROM xbot_runs WHERE idempotency_key = ? AND tenant_id = ?",
+        args: [input.idempotencyKey, input.tenantId],
+      });
+      if (existing.rows[0]) return { acquired: false, run: rowToRun(existing.rows[0]) };
+    }
+    throw new Error(`Run ${input.id} could not be acquired for tenant ${input.tenantId}`);
   }
 
   async updateRun(
@@ -278,15 +281,17 @@ export class SqlXbotStore implements XbotStore {
             WHERE ${where.join(" AND ")} ORDER BY generated_at DESC LIMIT ?`,
       args,
     });
-    return res.rows.map((r) => ({
-      id: String(r.id),
-      runId: String(r.run_id),
-      query: String(r.query),
-      summary: String(r.summary),
-      status: String(r.status) as ReportSummary["status"],
-      generatedAt: String(r.generated_at),
-      sources: Number(r.sources),
-    }));
+    return res.rows.map((r) =>
+      ReportSummarySchema.parse({
+        id: String(r.id),
+        runId: String(r.run_id),
+        query: String(r.query),
+        summary: String(r.summary),
+        status: String(r.status),
+        generatedAt: String(r.generated_at),
+        sources: Number(r.sources),
+      }),
+    );
   }
 
   async purgePost(postId: string): Promise<{ cacheRows: number; citingReports: string[] }> {
@@ -401,13 +406,13 @@ function parseJson(value: unknown): unknown {
 
 function rowToRun(r: Record<string, unknown>): ResearchRun {
   const opt = (v: unknown) => (v === null || v === undefined ? undefined : String(v));
-  return {
+  return ResearchRunSchema.parse({
     id: String(r.id),
-    workflow: String(r.workflow) as ResearchRun["workflow"],
+    workflow: String(r.workflow),
     tenantId: String(r.tenant_id),
     topicId: opt(r.topic_id),
-    trigger: String(r.trigger_type) as ResearchRun["trigger"],
-    status: String(r.status) as ResearchRun["status"],
+    trigger: String(r.trigger_type),
+    status: String(r.status),
     idempotencyKey: opt(r.idempotency_key),
     input: parseJson(r.input),
     plan: parseJson(r.plan),
@@ -416,5 +421,5 @@ function rowToRun(r: Record<string, unknown>): ResearchRun {
     error: opt(r.error),
     startedAt: String(r.started_at),
     completedAt: opt(r.completed_at),
-  };
+  });
 }

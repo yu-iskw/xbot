@@ -10,7 +10,6 @@ import {
   type DiscoveryInput,
   DiscoveryInputSchema,
   type DiscoveryResult,
-  DiscoveryResultSchema,
   type MonitorInput,
   MonitorInputSchema,
   type MonitorResult,
@@ -26,9 +25,14 @@ import { openStorage } from "./storage/open";
 import type { ListReportsOptions, XbotStore } from "./storage/store";
 import { createResearchTools, type ResearchOperations } from "./tools/research-tools";
 import { createXTools } from "./tools/x-tools";
-import { admitDiscoveryRun, createDiscoveryWorkflow } from "./workflows/discover";
+import {
+  admitDiscoveryRun,
+  createDiscoveryWorkflow,
+  type DiscoveryWorkflowOutput,
+} from "./workflows/discover";
 import { createMonitorWorkflow, type ScheduleEntry } from "./workflows/monitor";
 import { admitResearchRun, createResearchWorkflow, type ResearchWorkflowOutput } from "./workflows/research";
+import { discoveryReplay, researchReplay } from "./workflows/shared";
 import { BudgetedXReadClient } from "./x/budget";
 import { readOnlyFacade } from "./x/guard";
 import { LiveXReadClient } from "./x/live";
@@ -135,7 +139,7 @@ export async function createXbotRuntime(config: XbotConfig = {}): Promise<XbotRu
   const monitorWorkflow = createMonitorWorkflow({
     store,
     topics,
-    research: (input) => runResearch(input),
+    researchWorkflow,
     schedule,
   });
 
@@ -161,31 +165,28 @@ export async function createXbotRuntime(config: XbotConfig = {}): Promise<XbotRu
   }
 
   async function existingResearch(run: ResearchRun): Promise<ResearchOutcome> {
-    const report = run.reportId ? await store.getReport(run.reportId, run.tenantId) : undefined;
-    if (report) return { runId: run.id, report, deduplicated: true };
-    throw new Error(
-      run.status === "running"
-        ? `An identical research run (${run.id}) is already in progress`
-        : `Research run ${run.id} produced no report`,
-    );
+    const replay = await researchReplay(store, run);
+    return { runId: replay.runId, report: replay.report, deduplicated: true };
   }
 
-  /** Run an admitted workflow; any non-success leaves the run marked failed rather than running. */
-  async function executeWorkflow<T>(
+  /** Run an admitted workflow; any non-success leaves a still-running row marked failed. */
+  async function executeWorkflow<I extends { tenantId: string }, O>(
     workflow: {
-      createRun(o: { runId: string }): Promise<{ start(o: { inputData: never }): Promise<unknown> }>;
+      createRun(options: { runId: string }): Promise<{
+        start(options: { inputData: I }): Promise<{
+          status: string;
+          result?: O;
+          error?: { message?: string };
+        }>;
+      }>;
     },
     runId: string,
-    inputData: { tenantId: string },
+    inputData: I,
     label: string,
-  ): Promise<T> {
+  ): Promise<O> {
     const run = await workflow.createRun({ runId });
-    const result = (await run.start({ inputData: inputData as never })) as {
-      status: string;
-      result?: T;
-      error?: { message?: string };
-    };
-    if (result.status === "success") return result.result as T;
+    const result = await run.start({ inputData });
+    if (result.status === "success") return result.result as O;
     const message = result.error?.message ?? `workflow ${result.status}`;
     const current = await store.getRun(runId, inputData.tenantId);
     if (current?.status === "running") {
@@ -197,13 +198,13 @@ export async function createXbotRuntime(config: XbotConfig = {}): Promise<XbotRu
   async function runResearch(input: ResearchInput): Promise<ResearchOutcome> {
     const { parsed, acquired, run } = await admitResearch(input);
     if (!acquired) return existingResearch(run);
-    const output = await executeWorkflow<ResearchWorkflowOutput>(
+    const output = await executeWorkflow<typeof parsed, ResearchWorkflowOutput>(
       researchWorkflow,
       run.id,
       parsed,
       "Research",
     );
-    // prepare re-admits this same run id, so a successful workflow always carries its report.
+    // prepare continues the run admitted above, so a successful workflow carries its report.
     if (!output?.report) throw new Error(`Research run ${run.id} produced no report`);
     return { runId: output.runId, report: output.report, deduplicated: output.deduplicated };
   }
@@ -241,14 +242,8 @@ export async function createXbotRuntime(config: XbotConfig = {}): Promise<XbotRu
   async function discover(input: DiscoveryInput): Promise<DiscoveryResult> {
     const parsed = DiscoveryInputSchema.parse({ tenantId, ...input });
     const { acquired, run } = await admitDiscoveryRun(store, crypto.randomUUID(), parsed, now());
-    if (!acquired) {
-      const prior = DiscoveryResultSchema.safeParse(run.output);
-      if (prior.success) return prior.data;
-      throw new Error(
-        `An identical discovery run (${run.id}) is ${run.status === "running" ? "already in progress" : "without a result"}`,
-      );
-    }
-    const output = await executeWorkflow<{ runId: string; result?: DiscoveryResult }>(
+    if (!acquired) return discoveryReplay(run).result;
+    const output = await executeWorkflow<typeof parsed, DiscoveryWorkflowOutput>(
       discoveryWorkflow,
       run.id,
       parsed,
@@ -280,21 +275,26 @@ export async function createXbotRuntime(config: XbotConfig = {}): Promise<XbotRu
       if (acquired) {
         // Failures are recorded on the run row; callers observe them through getRun.
         // track() attaches the rejection handler that keeps this promise from going unhandled.
-        track(executeWorkflow(researchWorkflow, run.id, parsed, "Research"));
+        track(
+          executeWorkflow<typeof parsed, ResearchWorkflowOutput>(
+            researchWorkflow,
+            run.id,
+            parsed,
+            "Research",
+          ),
+        );
       }
       return { runId: run.id };
     },
     discover,
     async monitor(input) {
       const parsed = MonitorInputSchema.parse({ tenantId, ...input });
-      const run = await monitorWorkflow.createRun();
-      const result = await run.start({ inputData: parsed });
-      if (result.status !== "success") {
-        throw new Error(
-          `Monitoring failed: ${result.status === "failed" ? result.error?.message : result.status}`,
-        );
-      }
-      return result.result;
+      return executeWorkflow<typeof parsed, MonitorResult>(
+        monitorWorkflow,
+        crypto.randomUUID(),
+        parsed,
+        "Monitoring",
+      );
     },
     getRun: (runId, scope) => store.getRun(runId, scope?.tenantId ?? tenantId),
     getReport: (id, scope) => store.getReport(id, scope?.tenantId ?? tenantId),

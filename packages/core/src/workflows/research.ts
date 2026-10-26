@@ -4,7 +4,7 @@ import { z } from "zod";
 import { errorMessage } from "../errors";
 import { deterministicAnalysis } from "../research/analyze";
 import { collectEvidence } from "../research/collect";
-import { deriveIdempotencyKey, newId, occurrenceId } from "../research/idempotency";
+import { newId } from "../research/idempotency";
 import { deterministicPlan, finalizePlan } from "../research/plan";
 import { buildReport } from "../research/report";
 import { formatPostsForPrompt } from "../research/untrusted";
@@ -23,7 +23,7 @@ import {
 import type { XPost } from "../schemas/x";
 import type { XbotStore } from "../storage/store";
 import type { BudgetedXReadClient } from "../x/budget";
-import { failRun } from "./shared";
+import { admitWorkflowRun, failRun, researchReplay } from "./shared";
 
 export const RESEARCH_WORKFLOW_ID = "xbot-research";
 
@@ -38,13 +38,10 @@ export interface ResearchWorkflowDeps {
 const PreparedSchema = z.object({
   runId: z.string(),
   input: ResearchInputSchema,
-  duplicate: z
-    .object({ reportId: z.string().optional(), status: z.enum(["running", "completed", "failed"]) })
-    .optional(),
 });
 
 const PlannedSchema = PreparedSchema.extend({
-  plan: ResearchPlanSchema.optional(),
+  plan: ResearchPlanSchema,
   notes: z.array(z.string()),
 });
 
@@ -55,50 +52,42 @@ const CollectedSchema = PlannedSchema.extend({
   duplicatesRemoved: z.number().int(),
 });
 
-const AnalyzedSchema = CollectedSchema.extend({ analysis: AnalysisSchema.optional() });
+const AnalyzedSchema = CollectedSchema.extend({ analysis: AnalysisSchema });
 
 export const ResearchWorkflowOutputSchema = z.object({
   runId: z.string(),
-  runStatus: z.enum(["running", "completed", "failed"]),
+  runStatus: z.enum(["completed"]),
   deduplicated: z.boolean(),
-  reportId: z.string().optional(),
-  report: ResearchReportSchema.optional(),
+  reportId: z.string(),
+  report: ResearchReportSchema,
 });
 export type ResearchWorkflowOutput = z.infer<typeof ResearchWorkflowOutputSchema>;
 
-/**
- * Admit a research run: derive its idempotency key and acquire the run row. The runtime calls this
- * before starting the workflow; the workflow's prepare step calls it again (a no-op for the same id)
- * so scheduled fires, which bypass the runtime, are admitted the same way.
- */
+/** Admit a research run that has not already been inserted under this id. */
 export function admitResearchRun(
   store: XbotStore,
   runId: string,
   input: z.output<typeof ResearchInputSchema>,
   now: Date,
 ) {
-  const idempotencyKey = deriveIdempotencyKey({
+  return admitWorkflowRun(store, {
+    id: runId,
+    workflow: "research",
+    workflowId: RESEARCH_WORKFLOW_ID,
     tenantId: input.tenantId,
-    workflow: RESEARCH_WORKFLOW_ID,
-    input: {
+    ...(input.topicId ? { topicId: input.topicId } : {}),
+    trigger: input.trigger,
+    ...(input.triggerEventId ? { triggerEventId: input.triggerEventId } : {}),
+    ...(input.idempotencyKey ? { explicitKey: input.idempotencyKey } : {}),
+    input,
+    keyInput: {
       query: input.query.toLowerCase(),
       maxPosts: input.maxPosts,
       windowDays: input.windowDays,
       language: input.language,
       topicId: input.topicId,
     },
-    triggerEventId: occurrenceId(input.trigger, input.triggerEventId, now),
-    explicitKey: input.idempotencyKey,
-  });
-  return store.acquireRun({
-    id: runId,
-    workflow: "research",
-    tenantId: input.tenantId,
-    ...(input.topicId ? { topicId: input.topicId } : {}),
-    trigger: input.trigger,
-    ...(idempotencyKey ? { idempotencyKey } : {}),
-    input,
-    startedAt: now.toISOString(),
+    now,
   });
 }
 
@@ -117,19 +106,15 @@ export function createResearchWorkflow(deps: ResearchWorkflowDeps) {
     description: "Validate input, enforce idempotency, and open the run budget",
     inputSchema: ResearchInputSchema,
     outputSchema: PreparedSchema,
-    execute: async ({ inputData, runId }) => {
+    execute: async ({ inputData, runId, bail }) => {
       const input = ResearchInputSchema.parse(inputData);
-      const acquired = await admitResearchRun(store, runId, input, now());
-      if (!acquired.acquired) {
-        return {
-          runId: acquired.run.id,
-          input,
-          duplicate: {
-            status: acquired.run.status,
-            ...(acquired.run.reportId ? { reportId: acquired.run.reportId } : {}),
-          },
-        };
+      const existing = await store.getRun(runId, input.tenantId);
+      if (existing) {
+        x.openRun(existing.id, input.maxCostUsd);
+        return { runId: existing.id, input };
       }
+      const acquired = await admitResearchRun(store, runId, input, now());
+      if (!acquired.acquired) return bail(await researchReplay(store, acquired.run));
       x.openRun(acquired.run.id, input.maxCostUsd);
       return { runId: acquired.run.id, input };
     },
@@ -141,20 +126,24 @@ export function createResearchWorkflow(deps: ResearchWorkflowDeps) {
     inputSchema: PreparedSchema,
     outputSchema: PlannedSchema,
     execute: async ({ inputData }) => {
-      if (inputData.duplicate) return { ...inputData, notes: [] };
       const { runId, input } = inputData;
       try {
         const notes: string[] = [];
-        let proposed: ProposedPlan = deterministicPlan(input);
-        let planner: "model" | "deterministic" = "deterministic";
-        if (agents.planner) {
-          try {
-            proposed = await proposePlanWithModel(agents.planner, input);
-            planner = "model";
-          } catch (error) {
-            notes.push(`Planner model failed; used the deterministic plan (${errorMessage(error)}).`);
-          }
-        }
+        const plannerAgent = agents.planner;
+        let usedModel = false;
+        const proposed = plannerAgent
+          ? await orDeterministic(
+              "Planner model failed; used the deterministic plan",
+              notes,
+              deterministicPlan(input),
+              async () => {
+                const plan = await proposePlanWithModel(plannerAgent, input);
+                usedModel = true;
+                return plan;
+              },
+            )
+          : deterministicPlan(input);
+        const planner = usedModel ? "model" : "deterministic";
         const finalized = finalizePlan(proposed, input, {
           maxCostUsd: x.runLimit(input.maxCostUsd),
           costs: x,
@@ -175,8 +164,6 @@ export function createResearchWorkflow(deps: ResearchWorkflowDeps) {
     inputSchema: PlannedSchema,
     outputSchema: CollectedSchema,
     execute: async ({ inputData, abortSignal }) => {
-      const empty = { postIds: [], queriesRun: [], issues: [], duplicatesRemoved: 0 };
-      if (inputData.duplicate || !inputData.plan) return { ...inputData, ...empty };
       const { runId, plan: researchPlan } = inputData;
       try {
         const evidence = await collectEvidence(x, researchPlan, { runId, signal: abortSignal });
@@ -200,19 +187,21 @@ export function createResearchWorkflow(deps: ResearchWorkflowDeps) {
     inputSchema: CollectedSchema,
     outputSchema: AnalyzedSchema,
     execute: async ({ inputData }) => {
-      if (inputData.duplicate || !inputData.plan) return inputData;
       const { runId, input } = inputData;
       try {
         const posts = await loadEvidence(deps, evidenceByRun, runId, inputData.postIds);
         const notes = [...inputData.notes];
-        let analysis = deterministicAnalysis(input.query, posts, inputData.queriesRun);
-        if (agents.analyst && posts.length > 0) {
-          try {
-            analysis = await analyzeWithModel(agents.analyst, input, inputData.plan.objective, posts);
-          } catch (error) {
-            notes.push(`Analyst model failed; used deterministic analysis (${errorMessage(error)}).`);
-          }
-        }
+        const fallback = deterministicAnalysis(input.query, posts, inputData.queriesRun);
+        const analyst = agents.analyst;
+        const analysis =
+          analyst && posts.length > 0
+            ? await orDeterministic(
+                "Analyst model failed; used deterministic analysis",
+                notes,
+                fallback,
+                () => analyzeWithModel(analyst, input, inputData.plan.objective, posts),
+              )
+            : fallback;
         return { ...inputData, notes, analysis };
       } catch (error) {
         return fail(runId, error);
@@ -227,20 +216,7 @@ export function createResearchWorkflow(deps: ResearchWorkflowDeps) {
     outputSchema: ResearchWorkflowOutputSchema,
     execute: async ({ inputData }) => {
       const { runId, input } = inputData;
-      if (inputData.duplicate) {
-        const existing = inputData.duplicate.reportId
-          ? await store.getReport(inputData.duplicate.reportId, input.tenantId)
-          : undefined;
-        return {
-          runId,
-          runStatus: inputData.duplicate.status,
-          deduplicated: true,
-          ...(existing ? { reportId: existing.id, report: existing } : {}),
-        };
-      }
       try {
-        if (!inputData.plan || !inputData.analysis)
-          throw new Error("Research run is missing its plan or analysis");
         const posts = await loadEvidence(deps, evidenceByRun, runId, inputData.postIds);
         const usage = x.runUsage(runId) ?? { requests: 0, costUsd: 0 };
         const built = buildReport({
@@ -261,14 +237,14 @@ export function createResearchWorkflow(deps: ResearchWorkflowDeps) {
           generatedAt: now().toISOString(),
           modelMetadata: deps.modelMetadata,
         });
-        if (agents.reporter && built.findings.length > 0) {
-          try {
-            built.summary = scrubUnknownIds(await summarizeWithModel(agents.reporter, built), posts);
-          } catch (error) {
-            built.limitations.push(
-              `Reporter model failed; kept the analysis summary (${errorMessage(error)}).`,
-            );
-          }
+        const reporter = agents.reporter;
+        if (reporter && built.findings.length > 0) {
+          built.summary = await orDeterministic(
+            "Reporter model failed; kept the analysis summary",
+            built.limitations,
+            built.summary,
+            async () => scrubUnknownIds(await summarizeWithModel(reporter, built), posts),
+          );
         }
         await store.saveReport(built, input.tenantId, input.topicId);
         await store.updateRun(runId, {
@@ -304,6 +280,20 @@ export function createResearchWorkflow(deps: ResearchWorkflowDeps) {
     .then(analyze)
     .then(report)
     .commit();
+}
+
+async function orDeterministic<T>(
+  label: string,
+  notes: string[],
+  fallback: T,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    notes.push(`${label} (${errorMessage(error)}).`);
+    return fallback;
+  }
 }
 
 async function loadEvidence(

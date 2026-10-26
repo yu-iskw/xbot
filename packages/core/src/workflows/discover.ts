@@ -2,13 +2,12 @@ import { createStep, createWorkflow } from "@mastra/core/workflows";
 import { z } from "zod";
 import { classifyQueryError, errorMessage } from "../errors";
 import { engagement, extractThemes } from "../research/analyze";
-import { deriveIdempotencyKey, occurrenceId } from "../research/idempotency";
 import { recentSearchStart } from "../research/plan";
 import { type DiscoveredTopic, DiscoveryInputSchema, DiscoveryResultSchema } from "../schemas/research";
 import type { XPost } from "../schemas/x";
 import type { XbotStore } from "../storage/store";
 import type { BudgetedXReadClient } from "../x/budget";
-import { failRun } from "./shared";
+import { admitWorkflowRun, discoveryReplay, failRun } from "./shared";
 
 export const DISCOVERY_WORKFLOW_ID = "xbot-discovery";
 
@@ -21,46 +20,40 @@ export interface DiscoveryWorkflowDeps {
 const PreparedSchema = z.object({
   runId: z.string(),
   input: DiscoveryInputSchema,
-  duplicate: z
-    .object({ status: z.enum(["running", "completed", "failed"]), output: DiscoveryResultSchema.optional() })
-    .optional(),
 });
 
 export const DiscoveryWorkflowOutputSchema = z.object({
   runId: z.string(),
   deduplicated: z.boolean(),
-  runStatus: z.enum(["running", "completed", "failed"]),
-  result: DiscoveryResultSchema.optional(),
+  runStatus: z.enum(["completed"]),
+  result: DiscoveryResultSchema,
 });
+export type DiscoveryWorkflowOutput = z.infer<typeof DiscoveryWorkflowOutputSchema>;
 
-/**
- * Discovery scans configured interests and accounts with bounded searches and ranks recurring terms
- * by spread across distinct authors and engagement. It never issues open-ended searches.
- */
-/** Admit a discovery run (see admitResearchRun). */
+/** Admit a discovery run that has not already been inserted under this id. */
 export function admitDiscoveryRun(
   store: XbotStore,
   runId: string,
   input: z.output<typeof DiscoveryInputSchema>,
   now: Date,
 ) {
-  const idempotencyKey = deriveIdempotencyKey({
-    tenantId: input.tenantId,
-    workflow: DISCOVERY_WORKFLOW_ID,
-    input: { interests: [...input.interests].sort(), accounts: [...input.accounts].sort() },
-    triggerEventId: occurrenceId(input.trigger, input.triggerEventId, now),
-  });
-  return store.acquireRun({
+  return admitWorkflowRun(store, {
     id: runId,
     workflow: "discovery",
+    workflowId: DISCOVERY_WORKFLOW_ID,
     tenantId: input.tenantId,
     trigger: input.trigger,
-    ...(idempotencyKey ? { idempotencyKey } : {}),
+    ...(input.triggerEventId ? { triggerEventId: input.triggerEventId } : {}),
     input,
-    startedAt: now.toISOString(),
+    keyInput: { interests: [...input.interests].sort(), accounts: [...input.accounts].sort() },
+    now,
   });
 }
 
+/**
+ * Discovery scans configured interests and accounts with bounded searches and ranks recurring terms
+ * by spread across distinct authors and engagement. It never issues open-ended searches.
+ */
 export function createDiscoveryWorkflow(deps: DiscoveryWorkflowDeps) {
   const { x, store, now } = deps;
 
@@ -68,17 +61,15 @@ export function createDiscoveryWorkflow(deps: DiscoveryWorkflowDeps) {
     id: "prepare",
     inputSchema: DiscoveryInputSchema,
     outputSchema: PreparedSchema,
-    execute: async ({ inputData, runId }) => {
+    execute: async ({ inputData, runId, bail }) => {
       const input = DiscoveryInputSchema.parse(inputData);
-      const acquired = await admitDiscoveryRun(store, runId, input, now());
-      if (!acquired.acquired) {
-        const prior = DiscoveryResultSchema.safeParse(acquired.run.output);
-        return {
-          runId: acquired.run.id,
-          input,
-          duplicate: { status: acquired.run.status, ...(prior.success ? { output: prior.data } : {}) },
-        };
+      const existing = await store.getRun(runId, input.tenantId);
+      if (existing) {
+        x.openRun(existing.id, input.maxCostUsd);
+        return { runId: existing.id, input };
       }
+      const acquired = await admitDiscoveryRun(store, runId, input, now());
+      if (!acquired.acquired) return bail(discoveryReplay(acquired.run));
       x.openRun(acquired.run.id, input.maxCostUsd);
       return { runId: acquired.run.id, input };
     },
@@ -90,10 +81,6 @@ export function createDiscoveryWorkflow(deps: DiscoveryWorkflowDeps) {
     outputSchema: DiscoveryWorkflowOutputSchema,
     execute: async ({ inputData, abortSignal }) => {
       const { runId, input } = inputData;
-      if (inputData.duplicate) {
-        const { status, output } = inputData.duplicate;
-        return { runId, deduplicated: true, runStatus: status, ...(output ? { result: output } : {}) };
-      }
       try {
         const posts = new Map<string, XPost>();
         const limitations: string[] = [];

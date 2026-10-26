@@ -37,8 +37,8 @@ export interface XbotStore extends UsageStore, PostCache {
   close(): Promise<void>;
 
   /**
-   * Insert a run, or return the run already holding `idempotencyKey`. Failed runs are re-acquired, and
-   * a row that already has this run's id counts as acquired (the caller admitted it earlier).
+   * Insert a run, or return the run already holding `idempotencyKey` for this tenant. A failed run with
+   * that key is re-acquired. Callers that already inserted this id must load it with `getRun` instead.
    */
   acquireRun(input: CreateRunInput): Promise<AcquireRunResult>;
   updateRun(
