@@ -36,8 +36,8 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@mastra/core": "^1.79.0",
-    "@mastra/mcp": "^2.5.0",
+    "@mastra/core": "^1.80.0",
+    "@mastra/mcp": "^2.6.0",
     "@yu-iskw/xbot-core": "workspace:*",
     "zod": "^4.6.7"
   }
