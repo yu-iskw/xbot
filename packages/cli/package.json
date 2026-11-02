@@ -40,6 +40,6 @@
     "commander": "^15.0.0"
   },
   "devDependencies": {
-    "@mastra/core": "^1.79.0"
+    "@mastra/core": "^1.80.0"
   }
 }
