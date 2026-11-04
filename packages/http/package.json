@@ -36,7 +36,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@hono/node-server": "^2.1.5",
+    "@hono/node-server": "^2.1.6",
     "@mastra/core": "^1.79.0",
     "@mastra/hono": "^1.7.21",
     "@yu-iskw/xbot-core": "workspace:*",
