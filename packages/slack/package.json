@@ -41,6 +41,6 @@
     "@mastra/core": "^1.79.0",
     "@mastra/hono": "^1.7.21",
     "@yu-iskw/xbot-core": "workspace:*",
-    "hono": "^4.13.14"
+    "hono": "^4.13.16"
   }
 }
